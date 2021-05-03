@@ -5,7 +5,7 @@ import torch
 from torch.optim import Adam
 import gym
 import time
-import spinup.algos.pytorch.td3.core as core
+import spinup.models as core
 from spinup.utils.logx import EpochLogger
 
 

@@ -3,15 +3,15 @@ import torch
 from torch.optim import Adam
 import gym
 import time
-import spinup.algos.pytorch.ppo.core as core
+import spinup.models as core
 from spinup.utils.logx import EpochLogger
 from spinup.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 
 
-class PPOBuffer:
+class VPGBuffer:
     """
-    A buffer for storing trajectories experienced by a PPO agent interacting
+    A buffer for storing trajectories experienced by a VPG agent interacting
     with the environment, and using Generalized Advantage Estimation (GAE-Lambda)
     for calculating the advantages of state-action pairs.
     """
@@ -85,14 +85,14 @@ class PPOBuffer:
 
 
 
-def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
-        steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
-        vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
-        target_kl=0.01, logger_kwargs=dict(), save_freq=10):
+def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0, 
+        steps_per_epoch=4000, epochs=50, gamma=0.99, pi_lr=3e-4,
+        vf_lr=1e-3, train_v_iters=80, lam=0.97, max_ep_len=1000,
+        logger_kwargs=dict(), save_freq=10):
     """
-    Proximal Policy Optimization (by clipping), 
+    Vanilla Policy Gradient 
 
-    with early stopping based on approximate KL
+    (with GAE-Lambda for advantage estimation)
 
     Args:
         env_fn : A function which creates a copy of the environment.
@@ -144,9 +144,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                                            | make sure to flatten this!)
             ===========  ================  ======================================
 
-
         ac_kwargs (dict): Any kwargs appropriate for the ActorCritic object 
-            you provided to PPO.
+            you provided to VPG.
 
         seed (int): Seed for random number generators.
 
@@ -158,20 +157,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         gamma (float): Discount factor. (Always between 0 and 1.)
 
-        clip_ratio (float): Hyperparameter for clipping in the policy objective.
-            Roughly: how far can the new policy go from the old policy while 
-            still profiting (improving the objective function)? The new policy 
-            can still go farther than the clip_ratio says, but it doesn't help
-            on the objective anymore. (Usually small, 0.1 to 0.3.) Typically
-            denoted by :math:`\epsilon`. 
-
         pi_lr (float): Learning rate for policy optimizer.
 
         vf_lr (float): Learning rate for value function optimizer.
-
-        train_pi_iters (int): Maximum number of gradient descent steps to take 
-            on policy loss per epoch. (Early stopping may cause optimizer
-            to take fewer than this.)
 
         train_v_iters (int): Number of gradient descent steps to take on 
             value function per epoch.
@@ -180,10 +168,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             close to 1.)
 
         max_ep_len (int): Maximum length of trajectory / episode / rollout.
-
-        target_kl (float): Roughly what KL divergence we think is appropriate
-            between new and old policies after an update. This will get used 
-            for early stopping. (Usually small, 0.01 or 0.05.)
 
         logger_kwargs (dict): Keyword args for EpochLogger.
 
@@ -221,24 +205,20 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up experience buffer
     local_steps_per_epoch = int(steps_per_epoch / num_procs())
-    buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
+    buf = VPGBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
 
-    # Set up function for computing PPO policy loss
+    # Set up function for computing VPG policy loss
     def compute_loss_pi(data):
         obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
 
         # Policy loss
         pi, logp = ac.pi(obs, act)
-        ratio = torch.exp(logp - logp_old)
-        clip_adv = torch.clamp(ratio, 1-clip_ratio, 1+clip_ratio) * adv
-        loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
+        loss_pi = -(logp * adv).mean()
 
         # Useful extra info
         approx_kl = (logp_old - logp).mean().item()
         ent = pi.entropy().mean().item()
-        clipped = ratio.gt(1+clip_ratio) | ratio.lt(1-clip_ratio)
-        clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
-        pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
+        pi_info = dict(kl=approx_kl, ent=ent)
 
         return loss_pi, pi_info
 
@@ -257,23 +237,17 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     def update():
         data = buf.get()
 
+        # Get loss and info values before update
         pi_l_old, pi_info_old = compute_loss_pi(data)
         pi_l_old = pi_l_old.item()
         v_l_old = compute_loss_v(data).item()
 
-        # Train policy with multiple steps of gradient descent
-        for i in range(train_pi_iters):
-            pi_optimizer.zero_grad()
-            loss_pi, pi_info = compute_loss_pi(data)
-            kl = mpi_avg(pi_info['kl'])
-            if kl > 1.5 * target_kl:
-                logger.log('Early stopping at step %d due to reaching max kl.'%i)
-                break
-            loss_pi.backward()
-            mpi_avg_grads(ac.pi)    # average grads across MPI processes
-            pi_optimizer.step()
-
-        logger.store(StopIter=i)
+        # Train policy with a single step of gradient descent
+        pi_optimizer.zero_grad()
+        loss_pi, pi_info = compute_loss_pi(data)
+        loss_pi.backward()
+        mpi_avg_grads(ac.pi)    # average grads across MPI processes
+        pi_optimizer.step()
 
         # Value function learning
         for i in range(train_v_iters):
@@ -284,9 +258,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             vf_optimizer.step()
 
         # Log changes from update
-        kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
+        kl, ent = pi_info['kl'], pi_info_old['ent']
         logger.store(LossPi=pi_l_old, LossV=v_l_old,
-                     KL=kl, Entropy=ent, ClipFrac=cf,
+                     KL=kl, Entropy=ent,
                      DeltaLossPi=(loss_pi.item() - pi_l_old),
                      DeltaLossV=(loss_v.item() - v_l_old))
 
@@ -333,7 +307,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         if (epoch % save_freq == 0) or (epoch == epochs-1):
             logger.save_state({'env': env}, None)
 
-        # Perform PPO update!
+        # Perform VPG update!
         update()
 
         # Log info about epoch
@@ -348,8 +322,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('DeltaLossV', average_only=True)
         logger.log_tabular('Entropy', average_only=True)
         logger.log_tabular('KL', average_only=True)
-        logger.log_tabular('ClipFrac', average_only=True)
-        logger.log_tabular('StopIter', average_only=True)
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
 
@@ -364,7 +336,7 @@ if __name__ == '__main__':
     parser.add_argument('--cpu', type=int, default=4)
     parser.add_argument('--steps', type=int, default=4000)
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--exp_name', type=str, default='ppo')
+    parser.add_argument('--exp_name', type=str, default='vpg')
     args = parser.parse_args()
 
     mpi_fork(args.cpu)  # run parallel code with mpi
@@ -372,7 +344,7 @@ if __name__ == '__main__':
     from spinup.utils.run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
 
-    ppo(lambda : gym.make(args.env), actor_critic=core.MLPActorCritic,
+    vpg(lambda : gym.make(args.env), actor_critic=core.MLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
         seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
         logger_kwargs=logger_kwargs)
