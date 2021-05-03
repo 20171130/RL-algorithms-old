@@ -300,7 +300,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
             # save and log
             buf.store(o, a, r, v, logp)
-            logger.log(VVals=v)
+            logger.log(VVals=v, interaction=None)
             
             # Update obs (critical!)
             o = next_o
@@ -320,7 +320,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 buf.finish_path(v)
                 if terminal:
                     # only save EpRet / EpLen if trajectory finished
-                    logger.log(EpRet=ep_ret, EpLen=ep_len)
+                    logger.log(EpRet=ep_ret, EpLen=ep_len, episode=None)
                 o, ep_ret, ep_len = env.reset(), 0, 0
 
 
@@ -332,7 +332,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         update()
 
         # Log info about epoch
-        logger.log(epoch=epoch)
+        logger.log(epoch=None)
         logger.flush()
     return ac
 
