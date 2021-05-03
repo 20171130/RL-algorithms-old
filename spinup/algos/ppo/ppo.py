@@ -87,7 +87,7 @@ class PPOBuffer:
 def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
-        target_kl=0.01, save_freq=10):
+        target_kl=0.01, save_freq=10, logger=None):
     """
     Proximal Policy Optimization (by clipping), 
 
@@ -184,7 +184,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             between new and old policies after an update. This will get used 
             for early stopping. (Usually small, 0.01 or 0.05.)
 
-        logger_kwargs (dict): Keyword args for Epoch#logger.
 
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
@@ -193,10 +192,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Special function to avoid certain slowdowns from PyTorch + MPI combo.
     setup_pytorch_for_mpi()
-
-    # Set up #logger and save configuration
-    #logger = Epoch#logger(**#logger_kwargs)
-    #logger.save_config(locals())
 
     # Random seed
     seed += 10000 * proc_id()
@@ -216,7 +211,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Count variables
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.v])
-    #logger.log('\nNumber of parameters: \t pi: %d, \t v: %d\n'%var_counts)
+    logger.log({'pi_parameters': var_counts[0], 'Q_parameters':var_counts[1]})
 
     # Set up experience buffer
     local_steps_per_epoch = int(steps_per_epoch / num_procs())
@@ -251,7 +246,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
 
     # Set up model saving
-    #logger.setup_pytorch_saver(ac)
 
     def update():
         data = buf.get()
@@ -266,13 +260,12 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             loss_pi, pi_info = compute_loss_pi(data)
             kl = mpi_avg(pi_info['kl'])
             if kl > 1.5 * target_kl:
-                #logger.log('Early stopping at step %d due to reaching max kl.'%i)
+                print('Early stopping at step %d due to reaching max kl.'%i)
                 break
             loss_pi.backward()
             mpi_avg_grads(ac.pi)    # average grads across MPI processes
             pi_optimizer.step()
 
-        #logger.store(StopIter=i)
 
         # Value function learning
         for i in range(train_v_iters):
@@ -284,12 +277,12 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Log changes from update
         kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
-        """
-                #logger.store(LossPi=pi_l_old, LossV=v_l_old,
-                     KL=kl, Entropy=ent, ClipFrac=cf,
-                     DeltaLossPi=(loss_pi.item() - pi_l_old),
-                     DeltaLossV=(loss_v.item() - v_l_old))
-        """
+
+        logger.log(LossPi=pi_l_old, LossV=v_l_old,
+             KL=kl, Entropy=ent, ClipFrac=cf,
+             DeltaLossPi=(loss_pi.item() - pi_l_old),
+             DeltaLossV=(loss_v.item() - v_l_old))
+
 
 
     # Prepare for interaction with environment
@@ -307,7 +300,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
             # save and log
             buf.store(o, a, r, v, logp)
-            #logger.store(VVals=v)
+            logger.log(VVals=v)
             
             # Update obs (critical!)
             o = next_o
@@ -325,9 +318,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 else:
                     v = 0
                 buf.finish_path(v)
-                #Sif terminal:
+                if terminal:
                     # only save EpRet / EpLen if trajectory finished
-                    #logger.store(EpRet=ep_ret, EpLen=ep_len)
+                    logger.log(EpRet=ep_ret, EpLen=ep_len)
                 o, ep_ret, ep_len = env.reset(), 0, 0
 
 
@@ -339,21 +332,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         update()
 
         # Log info about epoch
-        #logger.log_tabular('Epoch', epoch)
-        #logger.log_tabular('EpRet', with_min_and_max=True)
-        #logger.log_tabular('EpLen', average_only=True)
-        #logger.log_tabular('VVals', with_min_and_max=True)
-        #logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
-        #logger.log_tabular('LossPi', average_only=True)
-        #logger.log_tabular('LossV', average_only=True)
-        #logger.log_tabular('DeltaLossPi', average_only=True)
-        #logger.log_tabular('DeltaLossV', average_only=True)
-        #logger.log_tabular('Entropy', average_only=True)
-        #logger.log_tabular('KL', average_only=True)
-        #logger.log_tabular('ClipFrac', average_only=True)
-        #logger.log_tabular('StopIter', average_only=True)
-        #logger.log_tabular('Time', time.time()-start_time)
-        #logger.dump_tabular()
+        logger.log(step= epoch)
+    return ac
 
 if __name__ == '__main__':
     import argparse
