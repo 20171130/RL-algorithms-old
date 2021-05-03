@@ -281,7 +281,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log(LossPi=pi_l_old, LossV=v_l_old,
              KL=kl, Entropy=ent, ClipFrac=cf,
              DeltaLossPi=(loss_pi.item() - pi_l_old),
-             DeltaLossV=(loss_v.item() - v_l_old))
+             DeltaLossV=(loss_v.item() - v_l_old), step='update')
 
 
 
@@ -300,7 +300,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
             # save and log
             buf.store(o, a, r, v, logp)
-            logger.log(VVals=v)
+            logger.log(VVals=v, step='interaction')
             
             # Update obs (critical!)
             o = next_o
@@ -320,7 +320,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 buf.finish_path(v)
                 if terminal:
                     # only save EpRet / EpLen if trajectory finished
-                    logger.log(EpRet=ep_ret, EpLen=ep_len)
+                    logger.log(EpRet=ep_ret, EpLen=ep_len, step='interaction')
                 o, ep_ret, ep_len = env.reset(), 0, 0
 
 
