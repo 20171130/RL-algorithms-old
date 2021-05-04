@@ -86,7 +86,7 @@ class PPOBuffer:
 
 def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
-        vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
+        v_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.01, save_freq=10, logger=None):
     """
     Proximal Policy Optimization (by clipping), 
@@ -166,7 +166,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         pi_lr (float): Learning rate for policy optimizer.
 
-        vf_lr (float): Learning rate for value function optimizer.
+        v_lr (float): Learning rate for value function optimizer.
 
         train_pi_iters (int): Maximum number of gradient descent steps to take 
             on policy loss per epoch. (Early stopping may cause optimizer
@@ -243,7 +243,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up optimizers for policy and value function
     pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
-    vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
+    vf_optimizer = Adam(ac.v.parameters(), lr=v_lr)
 
     # Set up model saving
 
