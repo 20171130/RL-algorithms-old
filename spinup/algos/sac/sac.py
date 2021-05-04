@@ -43,7 +43,7 @@ class ReplayBuffer:
 
 
 def sac(env_fn, model, seed=0, 
-        steps_per_epoch=4000, epochs=100, replay_size=int(1e6) , batch_size=100, start_steps=10000, 
+        steps_per_epoch=4000, epochs=100, replay_size=int(1e6) , batch_size=128, start_steps=10000, 
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=2000, 
         logger=None):
     """

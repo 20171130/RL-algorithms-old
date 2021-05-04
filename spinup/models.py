@@ -62,6 +62,9 @@ class Actor(nn.Module):
         # optionally compute the log likelihood of given actions under
         # those distributions.
         pi = self._distribution(obs)
+        if (torch.isnan(pi).any()):
+            print('action is nan!')
+            pdb.set_trace()
         return pi
 
 class MLPCategoricalActor(Actor):
@@ -230,8 +233,12 @@ class MLPDQActorCritic(nn.Module):
             act_dim = action_space.shape[0]
             act_limit = action_space.high[0]
             self.pi = SquashedGaussianMLPActor(obs_dim, act_dim, hidden_sizes, activation, act_limit)
+            print(f"action dim: {act_dim}")
+            for i, _ in enumerate(action_space.high):
+                print(f"action space size: {action_space.low[i]}, {action_space.high[i]}")
         elif isinstance(action_space, Discrete):
             act_dim = action_space.n
+            print(f"number of actions: {act_dim}")
             self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation, eps)
 
         # build policy and value functions
@@ -266,11 +273,7 @@ class MLPDQActorCritic(nn.Module):
 
             if isinstance(self.action_space, Discrete):
                 a = self.pi(o)
-                if (torch.isnan(a).any()):
-                    print('action is nan!')
-                    pdb.set_trace()
-                    return self.action_space.sample()
-                elif deterministic:
+                if deterministic:
                     a = a.argmax(dim=1)[0]
                 else:
                     a = Categorical(a[0]).sample()
@@ -317,6 +320,9 @@ class MLPDQActorCritic(nn.Module):
         # Useful info for logging
         q_info = dict(Q1Vals=q1.detach().numpy(),
                       Q2Vals=q2.detach().numpy())
+        
+        if torch.isnan(loss_q):
+            pdb.set_trace()
 
         return loss_q, q_info
 
@@ -350,9 +356,12 @@ class MLPDQActorCritic(nn.Module):
         # First run one gradient descent step for Q1 and Q2
         self.q_optimizer.zero_grad()
         loss_q, q_info = self.compute_loss_q(data)
-        loss_q.backward()
-        torch.nn.utils.clip_grad_norm_(parameters=self.q_params, max_norm=5, norm_type=2)
-        self.q_optimizer.step()
+        if not torch.isnan(loss_q):
+            loss_q.backward()
+            torch.nn.utils.clip_grad_norm_(parameters=self.q_params, max_norm=5, norm_type=2)
+            self.q_optimizer.step()
+        else:
+            print("q loss is nan")
 
         # Record things
         self.logger.log(q_update=None, loss_q=loss_q/2, **q_info)
@@ -365,9 +374,12 @@ class MLPDQActorCritic(nn.Module):
         # Next run one gradient descent step for pi.
         self.pi_optimizer.zero_grad()
         loss_pi = self.compute_loss_pi(data)
-        loss_pi.backward()
-        torch.nn.utils.clip_grad_norm_(parameters=self.pi.parameters(), max_norm=5, norm_type=2)
-        self.pi_optimizer.step()
+        if not torch.isnan(loss_pi):
+            loss_pi.backward()
+            torch.nn.utils.clip_grad_norm_(parameters=self.pi.parameters(), max_norm=5, norm_type=2)
+            self.pi_optimizer.step()
+        else:
+            print("pi loss is nan")
 
         # Unfreeze Q-networks so you can optimize it at next DDPG step.
         for p in self.q_params:
