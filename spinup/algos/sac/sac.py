@@ -42,7 +42,7 @@ class ReplayBuffer:
 
 
 
-def sac(env_fn, actor_critic=core.MLPDQActorCritic, ac_kwargs=dict(), seed=0, 
+def sac(env_fn, model, seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6) , batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=2000, 
         logger=None):
@@ -151,7 +151,7 @@ def sac(env_fn, actor_critic=core.MLPDQActorCritic, ac_kwargs=dict(), seed=0,
     act_dim = env.action_space.shape
 
     # Create actor-critic module and target networks
-    ac = actor_critic(env.observation_space, env.action_space, logger=logger, **ac_kwargs)
+    ac = model
     ac_targ = deepcopy(ac)
     ac.setTarget(ac_targ)
 

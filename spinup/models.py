@@ -65,15 +65,16 @@ class Actor(nn.Module):
 
 class MLPCategoricalActor(Actor):
     
-    def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
+    def __init__(self, obs_dim, act_dim, hidden_sizes, activation, eps=0):
         super().__init__()
+        self.eps = eps
         self.logits_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
 
     def _distribution(self, obs):
         """ Distribution of action"""
         logits = self.logits_net(obs)
         prob = Categorical(logits=logits).probs
-        prob = prob + 1e-6 # eps for numerical stability
+        prob = prob + self.eps # eps for numerical stability
         prob = prob/(prob.sum(dim=1, keepdim=True))
         return prob
 
@@ -210,7 +211,7 @@ class MLPDQActorCritic(nn.Module):
         depending on the input action
     """
     def __init__(self, observation_space, action_space, hidden_sizes=(256,256),
-                 activation=nn.ReLU, logger=None, lr=1e-4, gamma=0.99, alpha=0.2, polyak=0.995):
+                 activation=nn.ReLU, logger=None, lr=1e-4, gamma=0.99, alpha=0.2, polyak=0.995, eps=0):
         super().__init__()
         self.logger = logger
         self.gamma = gamma
@@ -226,7 +227,7 @@ class MLPDQActorCritic(nn.Module):
         elif isinstance(action_space, Discrete):
             self.action_space='discrete'
             act_dim = action_space.n
-            self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation)
+            self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation, eps)
 
         # build policy and value functions
         
@@ -300,7 +301,7 @@ class MLPDQActorCritic(nn.Module):
             loss = loss.sum(dim=1).mean(dim=0)
             
             entropy = -(pi*logp).sum(dim=1).mean(dim=0)
-            self.logger.log(entropy=entropy, loss=loss)
+            self.logger.log(entropy=entropy, pi_loss=loss)
 
         return loss
 
@@ -337,4 +338,4 @@ class MLPDQActorCritic(nn.Module):
                 p_targ.data.add_((1 - self.polyak) * p.data)
                 
         # Record things
-        self.logger.log(LossPi=loss_pi.item(), pi_update=None)
+        self.logger.log(pi_update=None)
