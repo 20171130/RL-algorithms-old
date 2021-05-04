@@ -258,7 +258,6 @@ class MLPDQActorCritic(nn.Module):
     def act(self, o, deterministic=False):
         """not batched"""
         with torch.no_grad():
-            o = torch.as_tensor(o, dtype=torch.float32)
             if len(o.shape) == 1:
                 o = o.unsqueeze(0)
                 
@@ -282,7 +281,7 @@ class MLPDQActorCritic(nn.Module):
                 if isinstance(a, tuple):
                     a = a[0]
                 a = a.squeeze(dim=0)
-            return a.numpy()
+            return a
         
         
     # Set up function for computing SAC Q-losses
@@ -318,8 +317,7 @@ class MLPDQActorCritic(nn.Module):
         loss_q = loss_q1 + loss_q2
 
         # Useful info for logging
-        q_info = dict(Q1Vals=q1.detach().numpy(),
-                      Q2Vals=q2.detach().numpy())
+        q_info = dict(Q1Vals=q1, Q2Vals=q2)
         
         if torch.isnan(loss_q):
             pdb.set_trace()

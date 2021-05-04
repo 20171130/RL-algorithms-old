@@ -5,13 +5,14 @@ import torch
 import gym
 import time
 import spinup.models as core
+from tqdm import tqdm
 
 class ReplayBuffer:
     """
     A simple FIFO experience replay buffer for SAC agents.
     """
 
-    def __init__(self, obs_dim, act_dim, size):
+    def __init__(self, obs_dim, act_dim, size, device):
         self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.obs2_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         if len(act_dim) > 0:
@@ -21,6 +22,7 @@ class ReplayBuffer:
         self.rew_buf = np.zeros(size, dtype=np.float32)
         self.done_buf = np.zeros(size, dtype=np.float32)
         self.ptr, self.size, self.max_size = 0, 0, size
+        self.device = device
 
     def store(self, obs, act, rew, next_obs, done):
         self.obs_buf[self.ptr] = obs
@@ -38,14 +40,14 @@ class ReplayBuffer:
                      act=self.act_buf[idxs],
                      rew=self.rew_buf[idxs],
                      done=self.done_buf[idxs])
-        return {k: torch.as_tensor(v) for k,v in batch.items()}
+        return {k: torch.as_tensor(v).to(self.device) for k,v in batch.items()}
 
 
 
-def sac(env_fn, model, seed=0, 
-        steps_per_epoch=4000, epochs=100, replay_size=int(1e6) , batch_size=128, start_steps=10000, 
-        update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=2000, 
-        logger=None):
+def sac(env_fn, model, replay_size=int(1e6), max_ep_len=2000, 
+        start_steps=20000, update_after=20000, 
+        batch_size=128, n_step=4000, n_update=50, n_test=10, 
+        logger=None, device='cpu', seed=0,  epochs=100):
     """
     Soft Actor-Critic (SAC)
 
@@ -154,31 +156,32 @@ def sac(env_fn, model, seed=0,
     ac = model
     ac_targ = deepcopy(ac)
     ac.setTarget(ac_targ)
+    pbar = iter(tqdm(range(epochs)))
 
     # Freeze target networks with respect to optimizers (only update via polyak averaging)
     for p in ac_targ.parameters():
         p.requires_grad = False
 
     # Experience buffer
-    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
+    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size, device=device)
 
     # Count variables (protip: try to get a feel for how different size networks behave!)
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
     print('\nNumber of parameters: \t pi: %d, \t q1: %d, \t q2: %d\n'%var_counts)
 
     def test_agent():
-        for j in range(num_test_episodes):
+        for j in range(n_test):
             o, d, ep_ret, ep_len = test_env.reset(), False, 0, 0
             while not(d or (ep_len == max_ep_len)):
                 # Take deterministic actions at test time 
-                action = ac.act(o, True)
-                o, r, d, _ = test_env.step(action)
+                action = ac.act(torch.as_tensor(o,  dtype=torch.float).to(device), True)
+                o, r, d, _ = test_env.step(action.cpu().numpy())
                 ep_ret += r
                 ep_len += 1
             logger.log(TestEpRet=ep_ret, TestEpLen=ep_len, testEpisode=None)
 
     # Prepare for interaction with environment
-    total_steps = steps_per_epoch * epochs
+    total_steps = n_step * epochs
     start_time = time.time()
     o, ep_ret, ep_len = env.reset(), 0, 0
 
@@ -189,7 +192,8 @@ def sac(env_fn, model, seed=0,
         # from a uniform distribution for better exploration. Afterwards, 
         # use the learned policy. 
         if t > start_steps:
-            a = ac.act(o)
+            a = ac.act(torch.as_tensor(o,  dtype=torch.float).to(device))
+            a = a.detach().cpu().numpy()
         else:
             a = env.action_space.sample()
 
@@ -216,16 +220,16 @@ def sac(env_fn, model, seed=0,
             o, ep_ret, ep_len = env.reset(), 0, 0
 
         # Update handling
-        if t >= update_after and t % update_every == 0:
-            for j in range(update_every):
-                batch = replay_buffer.sample_batch(batch_size)
-                ac.update(data=batch)
-                # Finally, update target networks by polyak averaging.
+        if t >= update_after and t % (n_step//n_update) == 0:
+            batch = replay_buffer.sample_batch(batch_size)
+            ac.update(data=batch)
+            # Finally, update target networks by polyak averaging.
 
 
         # End of epoch handling
-        if (t+1) % steps_per_epoch == 0:
-            epoch = (t+1) // steps_per_epoch
+        if (t+1) % n_step == 0:
+            epoch = (t+1) // n_step
+            next(pbar)
 
             # Test the performance of the deterministic version of the agent.
             test_agent()
