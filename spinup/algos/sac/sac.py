@@ -171,7 +171,8 @@ def sac(env_fn, model, seed=0,
             o, d, ep_ret, ep_len = test_env.reset(), False, 0, 0
             while not(d or (ep_len == max_ep_len)):
                 # Take deterministic actions at test time 
-                o, r, d, _ = test_env.step(ac.act(o, True))
+                action = ac.act(o, True)
+                o, r, d, _ = test_env.step(action)
                 ep_ret += r
                 ep_len += 1
             logger.log(TestEpRet=ep_ret, TestEpLen=ep_len, testEpisode=None)

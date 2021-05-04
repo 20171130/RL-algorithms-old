@@ -137,7 +137,8 @@ class SquashedGaussianMLPActor(nn.Module):
 
         pi_action = torch.tanh(pi_action)
         pi_action = self.act_limit * pi_action
-
+        if deterministic or with_logprob == False:
+            return pi_action
         return pi_action, logp_pi
 
 class MLPVFunction(nn.Module):
@@ -165,17 +166,16 @@ class MLPQFunction(nn.Module):
        
     def forward(self, obs, action=None):
         if self.action_space == 'continous':
-            q = self.q(torch.cat([obs, act], dim=-1))
+            q = self.q(torch.cat([obs, action], dim=-1))
         else:
             q = self.q(obs) 
             if action is None:
-                return q.squeeze(1)
-            if action.dtype == torch.long or action.dtype == torch.int64 or action.dtype == torch.int32:
+                q = q
+            elif action.dtype == torch.long or action.dtype == torch.int64 or action.dtype == torch.int32:
                 q = torch.gather(input=q,dim=1,index=action.unsqueeze(-1))
-                return q.squeeze(1)
-            elif not action is None: # expectation
+            else: # expectation
                 q = (q*action).sum(dim=-1)
-                return q.squeeze(1)
+        return q.squeeze(1)
 
 
 class MLPVActorCritic(nn.Module):
@@ -214,12 +214,15 @@ class MLPDQActorCritic(nn.Module):
         depending on the input action
     """
     def __init__(self, observation_space, action_space, hidden_sizes=(256,256),
-                 activation=nn.ReLU, logger=None, lr=1e-4, gamma=0.99, alpha=0.2, polyak=0.995, eps=0):
+                 activation=nn.ReLU, logger=None, lr=1e-4, gamma=0.99, alpha=0.2,
+                 polyak=0.995, eps=0, dqn=False):
         super().__init__()
         self.logger = logger
         self.gamma = gamma
         self.alpha = alpha
         self.polyak=polyak
+        self.dqn = dqn
+        self.eps = eps
         self.action_space=action_space
         
         obs_dim = observation_space.shape[0]
@@ -252,19 +255,30 @@ class MLPDQActorCritic(nn.Module):
             if len(o.shape) == 1:
                 o = o.unsqueeze(0)
                 
-            q1 = self.q1(o)
-            q2 = self.q2(o)
-            q = torch.min(q1, q2)
-            a = q.argmax(dim=1)[0].numpy()
-            if not deterministic and random.random()<1e-2:
-                return self.action_space.sample()
-            return a
-            
-            a = self.pi(o)
-            if deterministic:
-                a = a.argmax(dim=1)[0]
+            if self.dqn:
+                q1 = self.q1(o)
+                q2 = self.q2(o)
+                q = torch.min(q1, q2)
+                a = q.argmax(dim=1)[0].numpy()
+                if not deterministic and random.random()<self.eps:
+                    return self.action_space.sample()
+                return a
+
+            if isinstance(self.action_space, Discrete):
+                a = self.pi(o)
+                if (torch.isnan(a).any()):
+                    print('action is nan!')
+                    pdb.set_trace()
+                    return self.action_space.sample()
+                elif deterministic:
+                    a = a.argmax(dim=1)[0]
+                else:
+                    a = Categorical(a[0]).sample()
             else:
-                a = Categorical(a[0]).sample()
+                a = self.pi(o, deterministic)
+                if isinstance(a, tuple):
+                    a = a[0]
+                a = a.squeeze(dim=0)
             return a.numpy()
         
         
@@ -278,16 +292,22 @@ class MLPDQActorCritic(nn.Module):
         # Bellman backup for Q functions
         with torch.no_grad():
             # Target actions come from *current* policy
-            a2 = self.pi(o2).detach() # a distribution when discrete
-            logp_a2 = torch.log(a2)
-
-            # Target Q-values
-            q1_pi_targ = self.target.q1(o2)
-            q2_pi_targ = self.target.q2(o2)
-            q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
-            q_pi_targ = q_pi_targ 
-            backup = r.unsqueeze(dim=1) + self.gamma * (1 - d.unsqueeze(dim=1)) * (q_pi_targ - self.alpha * logp_a2)
-            backup = (backup* a2).sum(dim=1)
+            a2 = self.pi(o2) # a distribution when discrete
+            if isinstance(self.action_space, Discrete):
+                logp_a2 = torch.log(a2)
+                # Target Q-values
+                q1_pi_targ = self.target.q1(o2)
+                q2_pi_targ = self.target.q2(o2)
+                q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
+                backup = r.unsqueeze(dim=1) + self.gamma * (1 - d.unsqueeze(dim=1)) * (q_pi_targ - self.alpha * logp_a2)
+                backup = (backup* a2).sum(dim=1)
+            else:
+                a2, logp_a2 = a2
+                # Target Q-values
+                q1_pi_targ = self.target.q1(o2, a2)
+                q2_pi_targ = self.target.q2(o2, a2)
+                q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
+                backup = r + self.gamma * (1 - d) * (q_pi_targ - self.alpha * logp_a2)
 
         # MSE loss against Bellman backup
         loss_q1 = ((q1 - backup)**2).mean()
@@ -313,9 +333,16 @@ class MLPDQActorCritic(nn.Module):
             optimum = q.max(dim=1, keepdim=True)[0].detach()
             regret = optimum - (pi*q).sum(dim=1)
             loss = regret.mean()
-            
             entropy = -(pi*logp).sum(dim=1).mean(dim=0)
             self.logger.log(entropy=entropy, pi_regret=loss)
+        else:
+            action, logp = self.pi(o)
+            q1 = self.q1(o, action)
+            q2 = self.q2(o, action)
+            q = torch.min(q1, q2)
+            q = q - self.alpha * logp
+            loss = (-q).mean()
+            self.logger.log(logp=logp, pi_reward=q)
 
         return loss
 
@@ -324,6 +351,7 @@ class MLPDQActorCritic(nn.Module):
         self.q_optimizer.zero_grad()
         loss_q, q_info = self.compute_loss_q(data)
         loss_q.backward()
+        torch.nn.utils.clip_grad_norm_(parameters=self.q_params, max_norm=5, norm_type=2)
         self.q_optimizer.step()
 
         # Record things
@@ -338,6 +366,7 @@ class MLPDQActorCritic(nn.Module):
         self.pi_optimizer.zero_grad()
         loss_pi = self.compute_loss_pi(data)
         loss_pi.backward()
+        torch.nn.utils.clip_grad_norm_(parameters=self.pi.parameters(), max_norm=5, norm_type=2)
         self.pi_optimizer.step()
 
         # Unfreeze Q-networks so you can optimize it at next DDPG step.
