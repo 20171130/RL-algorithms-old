@@ -3,6 +3,7 @@ import pdb
 import itertools
 import scipy.signal
 from gym.spaces import Box, Discrete
+import random
 
 import torch
 import torch.nn as nn
@@ -68,14 +69,16 @@ class MLPCategoricalActor(Actor):
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation, eps=0):
         super().__init__()
         self.eps = eps
+        self.softmax = nn.Softmax(dim=1)
         self.logits_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
 
     def _distribution(self, obs):
         """ Distribution of action"""
         logits = self.logits_net(obs)
-        prob = Categorical(logits=logits).probs
-        prob = prob + self.eps # eps for numerical stability
-        prob = prob/(prob.sum(dim=1, keepdim=True))
+        prob = self.softmax(logits)
+        if self.eps > 0:
+            prob = prob + self.eps # eps for numerical stability
+            prob = prob/(prob.sum(dim=1, keepdim=True))
         return prob
 
 
@@ -217,15 +220,14 @@ class MLPDQActorCritic(nn.Module):
         self.gamma = gamma
         self.alpha = alpha
         self.polyak=polyak
+        self.action_space=action_space
         
         obs_dim = observation_space.shape[0]
         if isinstance(action_space, Box):
-            self.action_space='continous'
             act_dim = action_space.shape[0]
             act_limit = action_space.high[0]
             self.pi = SquashedGaussianMLPActor(obs_dim, act_dim, hidden_sizes, activation, act_limit)
         elif isinstance(action_space, Discrete):
-            self.action_space='discrete'
             act_dim = action_space.n
             self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation, eps)
 
@@ -249,12 +251,22 @@ class MLPDQActorCritic(nn.Module):
             o = torch.as_tensor(o, dtype=torch.float32)
             if len(o.shape) == 1:
                 o = o.unsqueeze(0)
+                
+            q1 = self.q1(o)
+            q2 = self.q2(o)
+            q = torch.min(q1, q2)
+            a = q.argmax(dim=1)[0].numpy()
+            if not deterministic and random.random()<1e-2:
+                return self.action_space.sample()
+            return a
+            
             a = self.pi(o)
             if deterministic:
                 a = a.argmax(dim=1)[0]
             else:
                 a = Categorical(a[0]).sample()
             return a.numpy()
+        
         
     # Set up function for computing SAC Q-losses
     def compute_loss_q(self, data):
@@ -291,17 +303,19 @@ class MLPDQActorCritic(nn.Module):
     # Set up function for computing SAC pi loss
     def compute_loss_pi(self, data):
         o = data['obs']
-        if self.action_space =='discrete':
+        if isinstance(self.action_space, Discrete):
             pi = self.pi(o)
             logp = torch.log(pi)
             q1 = self.q1(o)
             q2 = self.q2(o)
             q = torch.min(q1, q2)
-            loss = (self.alpha * logp - q)*pi
-            loss = loss.sum(dim=1).mean(dim=0)
+            q = q - self.alpha * logp
+            optimum = q.max(dim=1, keepdim=True)[0].detach()
+            regret = optimum - (pi*q).sum(dim=1)
+            loss = regret.mean()
             
             entropy = -(pi*logp).sum(dim=1).mean(dim=0)
-            self.logger.log(entropy=entropy, pi_loss=loss)
+            self.logger.log(entropy=entropy, pi_regret=loss)
 
         return loss
 
@@ -313,7 +327,7 @@ class MLPDQActorCritic(nn.Module):
         self.q_optimizer.step()
 
         # Record things
-        self.logger.log(q_update=None, **q_info)
+        self.logger.log(q_update=None, loss_q=loss_q/2, **q_info)
 
         # Freeze Q-networks so you don't waste computational effort 
         # computing gradients for them during the policy learning step.
