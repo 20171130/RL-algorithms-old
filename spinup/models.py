@@ -1,11 +1,15 @@
 import numpy as np
+import pdb
+import itertools
 import scipy.signal
 from gym.spaces import Box, Discrete
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.distributions.normal import Normal
 from torch.distributions.categorical import Categorical
+from torch.optim import Adam
 
 
 def combined_shape(length, shape=None):
@@ -52,16 +56,12 @@ class Actor(nn.Module):
     def _log_prob_from_distribution(self, pi, act):
         raise NotImplementedError
 
-    def forward(self, obs, act=None):
+    def forward(self, obs):
         # Produce action distributions for given observations, and 
         # optionally compute the log likelihood of given actions under
         # those distributions.
         pi = self._distribution(obs)
-        logp_a = None
-        if act is not None:
-            logp_a = self._log_prob_from_distribution(pi, act)
-        return pi, logp_a
-
+        return pi
 
 class MLPCategoricalActor(Actor):
     
@@ -70,11 +70,12 @@ class MLPCategoricalActor(Actor):
         self.logits_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
 
     def _distribution(self, obs):
+        """ Distribution of action"""
         logits = self.logits_net(obs)
-        return Categorical(logits=logits)
-
-    def _log_prob_from_distribution(self, pi, act):
-        return pi.log_prob(act)
+        prob = Categorical(logits=logits).probs
+        prob = prob + 1e-6 # eps for numerical stability
+        prob = prob/(prob.sum(dim=1, keepdim=True))
+        return prob
 
 
 class MLPGaussianActor(Actor):
@@ -93,6 +94,8 @@ class MLPGaussianActor(Actor):
     def _log_prob_from_distribution(self, pi, act):
         return pi.log_prob(act).sum(axis=-1)    # Last axis sum needed for Torch Normal distribution
 
+LOG_STD_MAX = 2
+LOG_STD_MIN = -20
 class SquashedGaussianMLPActor(nn.Module):
 
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation, act_limit):
@@ -144,13 +147,32 @@ class MLPVFunction(nn.Module):
 
 class MLPQFunction(nn.Module):
 
-    def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
+    def __init__(self, obs_dim, action_space, hidden_sizes, activation):
         super().__init__()
-        self.q = mlp([obs_dim + act_dim] + list(hidden_sizes) + [1], activation)
+        if isinstance(action_space, Box):
+            self.action_space = 'continous'
+            act_dim = action_space.shape[0]
+            act_limit = action_space.high[0]
+            self.q = mlp([obs_dim + act_dim] + list(hidden_sizes) + [1], activation)
+                
+        elif isinstance(action_space, Discrete):
+            self.action_space = 'discrete'
+            self.q = mlp([obs_dim] + list(hidden_sizes) + [action_space.n], activation)
+       
+    def forward(self, obs, action=None):
+        if self.action_space == 'continous':
+            q = self.q(torch.cat([obs, act], dim=-1))
+        else:
+            q = self.q(obs) 
+            if action is None:
+                return q.squeeze(1)
+            if action.dtype == torch.long or action.dtype == torch.int64 or action.dtype == torch.int32:
+                q = torch.gather(input=q,dim=1,index=action.unsqueeze(-1))
+                return q.squeeze(1)
+            elif not action is None: # expectation
+                q = (q*action).sum(dim=-1)
+                return q.squeeze(1)
 
-    def forward(self, obs, act):
-        q = self.q(torch.cat([obs, act], dim=-1))
-        return torch.squeeze(q, -1) # Critical to ensure q has right shape.
 
 class MLPVActorCritic(nn.Module):
     def __init__(self, observation_space, action_space, 
@@ -180,24 +202,139 @@ class MLPVActorCritic(nn.Module):
         return self.step(obs)[0]
     
 class MLPDQActorCritic(nn.Module):
+    """
+        pi returns a distribution
+        .act() does the sampling
+        q = Q(s, a) when continous
+        when discrete, Q returns Q for all/average/an action,
+        depending on the input action
+    """
     def __init__(self, observation_space, action_space, hidden_sizes=(256,256),
-                 activation=nn.ReLU):
+                 activation=nn.ReLU, logger=None, lr=1e-4, gamma=0.99, alpha=0.2, polyak=0.995):
         super().__init__()
-
+        self.logger = logger
+        self.gamma = gamma
+        self.alpha = alpha
+        self.polyak=polyak
+        
         obs_dim = observation_space.shape[0]
         if isinstance(action_space, Box):
+            self.action_space='continous'
             act_dim = action_space.shape[0]
             act_limit = action_space.high[0]
             self.pi = SquashedGaussianMLPActor(obs_dim, act_dim, hidden_sizes, activation, act_limit)
         elif isinstance(action_space, Discrete):
+            self.action_space='discrete'
+            act_dim = action_space.n
             self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation)
 
         # build policy and value functions
         
-        self.q1 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
-        self.q2 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
+        self.q1 = MLPQFunction(obs_dim, action_space, hidden_sizes, activation)
+        self.q2 = MLPQFunction(obs_dim, action_space, hidden_sizes, activation)
+        
+        # Set up optimizers for policy and q-function
+        self.pi_optimizer = Adam(self.pi.parameters(), lr=lr)
+        # List of parameters for both Q-networks (save this for convenience)
+        self.q_params = itertools.chain(self.q1.parameters(), self.q2.parameters())
+        self.q_optimizer = Adam(self.q_params, lr=lr)
+        
+    def setTarget(self, target):
+        self.target = target
 
-    def act(self, obs, deterministic=False):
+    def act(self, o, deterministic=False):
+        """not batched"""
         with torch.no_grad():
-            a, _ = self.pi(obs, deterministic, False)
+            o = torch.as_tensor(o, dtype=torch.float32)
+            if len(o.shape) == 1:
+                o = o.unsqueeze(0)
+            a = self.pi(o)
+            if deterministic:
+                a = a.argmax(dim=1)[0]
+            else:
+                a = Categorical(a[0]).sample()
             return a.numpy()
+        
+    # Set up function for computing SAC Q-losses
+    def compute_loss_q(self, data):
+        o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
+
+        q1 = self.q1(o, a)
+        q2 = self.q2(o, a)
+
+        # Bellman backup for Q functions
+        with torch.no_grad():
+            # Target actions come from *current* policy
+            a2 = self.pi(o2).detach() # a distribution when discrete
+            logp_a2 = torch.log(a2)
+
+            # Target Q-values
+            q1_pi_targ = self.target.q1(o2)
+            q2_pi_targ = self.target.q2(o2)
+            q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
+            q_pi_targ = q_pi_targ 
+            backup = r.unsqueeze(dim=1) + self.gamma * (1 - d.unsqueeze(dim=1)) * (q_pi_targ - self.alpha * logp_a2)
+            backup = (backup* a2).sum(dim=1)
+
+        # MSE loss against Bellman backup
+        loss_q1 = ((q1 - backup)**2).mean()
+        loss_q2 = ((q2 - backup)**2).mean()
+        loss_q = loss_q1 + loss_q2
+
+        # Useful info for logging
+        q_info = dict(Q1Vals=q1.detach().numpy(),
+                      Q2Vals=q2.detach().numpy())
+
+        return loss_q, q_info
+
+    # Set up function for computing SAC pi loss
+    def compute_loss_pi(self, data):
+        o = data['obs']
+        if self.action_space =='discrete':
+            pi = self.pi(o)
+            logp = torch.log(pi)
+            q1 = self.q1(o)
+            q2 = self.q2(o)
+            q = torch.min(q1, q2)
+            loss = (self.alpha * logp - q)*pi
+            loss = loss.sum(dim=1).mean(dim=0)
+            
+            entropy = -(pi*logp).sum(dim=1).mean(dim=0)
+            self.logger.log(entropy=entropy, loss=loss)
+
+        return loss
+
+    def update(self, data):
+        # First run one gradient descent step for Q1 and Q2
+        self.q_optimizer.zero_grad()
+        loss_q, q_info = self.compute_loss_q(data)
+        loss_q.backward()
+        self.q_optimizer.step()
+
+        # Record things
+        self.logger.log(q_update=None, **q_info)
+
+        # Freeze Q-networks so you don't waste computational effort 
+        # computing gradients for them during the policy learning step.
+        for p in self.q_params:
+            p.requires_grad = False
+
+        # Next run one gradient descent step for pi.
+        self.pi_optimizer.zero_grad()
+        loss_pi = self.compute_loss_pi(data)
+        loss_pi.backward()
+        self.pi_optimizer.step()
+
+        # Unfreeze Q-networks so you can optimize it at next DDPG step.
+        for p in self.q_params:
+            p.requires_grad = True
+            
+        with torch.no_grad():
+            for p, p_targ in zip(self.parameters(), self.target.parameters()):
+                # NB: We use an in-place operations "mul_", "add_" to update target
+                # params, as opposed to "mul" and "add", which would make new tensors.
+                p_targ.data.mul_(self.polyak)
+                p_targ.data.add_((1 - self.polyak) * p.data)
+                
+        # Record things
+        self.logger.log(LossPi=loss_pi.item(), pi_update=None)
