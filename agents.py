@@ -1,29 +1,39 @@
 from models import *
 """
-    Design:
-        Agents does not manage things like 
+    Hierarchiy:
+        algorithm
             batchsize
             the number of updates per interaction
-            preprocessing the env 
-                the agent do not care about the tensor shapes or model architecture
-    An agent exposes:
-        .act() does the sampling
-        .update_x(batch), x = model, q, pi
-    An agent implements:
-        q 
-            takes the env, and kwargs
-            when continous, = Q(s, a) 
-            when discrete, 
-                Q returns Q for all/average/an action,
-                depending on the input action
-        pi returns a distribution
+            preprocessing the env    
+            Both the agent and the model do not care about the tensor shapes or model architecture
+        agent
+            contains models
+            An agent exposes:
+                .act() does the sampling
+                .update_x(batch), x = p, q, pi
+        (abstract) models
+            q 
+                takes the env, and kwargs
+                when continous, = Q(s, a) 
+                when discrete, 
+                    Q returns Q for all/average/an action,
+                    depending on the input action
+            pi returns a distribution
+        network
+            CNN, MLP, ...
+
+
+
 """
 
 class QLearning(nn.Module):
     """ Double Dueling clipped (from TD3) Q Learning"""
-    def __init__(self, q_args,
+    def __init__(self, q_net, q_args,
                  gamma, eps, target_sync_rate,
                  model_args, logger):
+        """
+            q_net is the network class
+        """
         super().__init__()
         self.logger = logger
         self.gamma = gamma
@@ -31,8 +41,8 @@ class QLearning(nn.Module):
         self.eps = eps
         self.action_space=action_space
 
-        self.q1 = q_fn(**q_args)
-        self.q2 = q_fn(**q_args)
+        self.q1 = QFunction(q_net, q_args)
+        self.q2 = QFunction(q_net, q_args)
         self.q1_target = deepcopy(q1)
         self.q2_target = deepcopy(q2)
         for p in self.q1_target.parameters():

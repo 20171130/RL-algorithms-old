@@ -26,11 +26,11 @@ def MLP(sizes, activation, output_activation=nn.Identity):
         layers += [nn.Linear(sizes[j], sizes[j+1]), act()]
     return nn.Sequential(*layers)
 
-def CNN(sizes, kernels, activation, output_activation=nn.Identity):
+def CNN(sizes, kernels, strides, paddings, activation, output_activation=nn.Identity):
     layers = []
     for j in range(len(sizes)-1):
         act = activation if j < len(sizes)-2 else output_activation
-        layers += [nn.Linear(sizes[j], sizes[j+1]), act()]
+        layers += [nn.Convolution(sizes[j], sizes[j+1], kernels[j], strides[j], paddings[j]), act()]
     return nn.Sequential(*layers)
 
 def count_vars(module):
@@ -63,7 +63,7 @@ class WorldModel(nn.Module):
     def forward(self, obs):
         return torch.squeeze(self.v_net(obs), -1) # Critical to ensure v has right shape.
     
-class VFunction(nn.Module):
+class VCritic(nn.Module):
 
     def __init__(self, obs_dim, hidden_sizes, activation):
         super().__init__()
@@ -72,26 +72,15 @@ class VFunction(nn.Module):
     def forward(self, obs):
         return torch.squeeze(self.v_net(obs), -1) # Critical to ensure v has right shape.
 
-class QFunction(nn.Module):
+class QCritic(nn.Module):
     """
     Dueling Q, currently only implemented for discrete action space
     if n_embedding > 0, assumes the action space needs embedding
+    Notice that the output shape should be 1+action_space.n for discrete dueling Q
     """
-    def __init__(self, state_shape, action_shape, hidden_sizes, n_embedding=0, kernels=None, activation=nn.ReLU):
+    def __init__(self, q_net, q_args):
         super().__init__()
-        if len(action_shape) == 0:
-            self.action_space = 'discrete'
-            if kernels is None: # MLP
-                self.q = MLP([obs_dim] + list(hidden_sizes) + [action_space.n + 1], activation)
-            else: # CNN
-                self.q = CNN([obs_dim] + list(hidden_sizes) + [action_space.n + 1],
-                             kernels=kernels, activation=activation)
-        else:
-            self.action_space = 'continous'
-            act_dim = action_space.shape[0]
-            act_limit = action_space.high[0]
-            self.q = MLP([obs_dim + act_dim] + list(hidden_sizes) + [1], activation)
-
+        self.q = q_net(**q_args)
        
     def forward(self, obs, action=None):
         if self.action_space == 'continous':
