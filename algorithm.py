@@ -50,7 +50,7 @@ def RL(env_fn, agent,
       logger=None, device='cpu', seed=0, n_epoch=100):
     """ 
     a generic algorithm for model-free reinforcement learning
-    plugin state preprocessing if necessary
+    plugin state preprocessing if necessary, by wrapping the env
     """
 
     env, test_env = env_fn(), env_fn()

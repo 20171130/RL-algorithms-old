@@ -13,12 +13,6 @@ from torch.distributions.categorical import Categorical
 from torch.optim import Adam
 
 
-def combined_shape(length, shape=None):
-    if shape is None:
-        return (length,)
-    return (length, shape) if np.isscalar(shape) else (length, *shape)
-
-
 def MLP(sizes, activation, output_activation=nn.Identity):
     layers = []
     for j in range(len(sizes)-1):
@@ -33,26 +27,7 @@ def CNN(sizes, kernels, strides, paddings, activation, output_activation=nn.Iden
         layers += [nn.Convolution(sizes[j], sizes[j+1], kernels[j], strides[j], paddings[j]), act()]
     return nn.Sequential(*layers)
 
-def count_vars(module):
-    return sum([np.prod(p.shape) for p in module.parameters()])
 
-
-def discount_cumsum(x, discount):
-    """
-    magic from rllab for computing discounted cumulative sums of vectors.
-
-    input: 
-        vector x, 
-        [x0, 
-         x1, 
-         x2]
-
-    output:
-        [x0 + discount * x1 + discount^2 * x2,  
-         x1 + discount * x2,
-         x2]
-    """
-    return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
 
 class WorldModel(nn.Module):
 

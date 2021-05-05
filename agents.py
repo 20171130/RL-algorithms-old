@@ -21,16 +21,12 @@ from models import *
             pi returns a distribution
         network
             CNN, MLP, ...
-
-
-
 """
 
 class QLearning(nn.Module):
     """ Double Dueling clipped (from TD3) Q Learning"""
     def __init__(self, q_net, q_args,
-                 gamma, eps, target_sync_rate,
-                 model_args, logger):
+                 gamma, eps, target_sync_rate, logger):
         """
             q_net is the network class
         """
