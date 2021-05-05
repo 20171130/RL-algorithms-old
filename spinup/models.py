@@ -75,11 +75,13 @@ class MLPCategoricalActor(Actor):
         self.softmax = nn.Softmax(dim=1)
         self.logits_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
 
-    def _distribution(self, obs):
+    def _distribution(self, obs, eps=None):
         """ Distribution of action"""
         logits = self.logits_net(obs)
         prob = self.softmax(logits)
-        if self.eps > 0:
+        if eps is None:
+            eps = self.eps
+        if eps > 0:
             prob = prob + self.eps # eps for numerical stability
             prob = prob/(prob.sum(dim=1, keepdim=True))
         return prob
@@ -217,7 +219,7 @@ class MLPDQActorCritic(nn.Module):
         depending on the input action
     """
     def __init__(self, observation_space, action_space, hidden_sizes=(256,256),
-                 activation=nn.ReLU, logger=None, lr=1e-4, gamma=0.99, alpha=0.2,
+                 activation=nn.ReLU, logger=None, q_lr=1e-4, pi_lr=1e-4, gamma=0.99, alpha=0.2,
                  polyak=0.995, eps=0, dqn=False):
         super().__init__()
         self.logger = logger
@@ -247,10 +249,10 @@ class MLPDQActorCritic(nn.Module):
         self.q2 = MLPQFunction(obs_dim, action_space, hidden_sizes, activation)
         
         # Set up optimizers for policy and q-function
-        self.pi_optimizer = Adam(self.pi.parameters(), lr=lr)
+        self.pi_optimizer = Adam(self.pi.parameters(), lr=pi_lr)
         # List of parameters for both Q-networks (save this for convenience)
         self.q_params = itertools.chain(self.q1.parameters(), self.q2.parameters())
-        self.q_optimizer = Adam(self.q_params, lr=lr)
+        self.q_optimizer = Adam(self.q_params, lr=q_lr)
         
     def setTarget(self, target):
         self.target = target
@@ -265,9 +267,9 @@ class MLPDQActorCritic(nn.Module):
                 q1 = self.q1(o)
                 q2 = self.q2(o)
                 q = torch.min(q1, q2)
-                a = q.argmax(dim=1)[0].numpy()
+                a = q.argmax(dim=1)[0]
                 if not deterministic and random.random()<self.eps:
-                    return self.action_space.sample()
+                    return torch.as_tensor(self.action_space.sample())
                 return a
 
             if isinstance(self.action_space, Discrete):
@@ -295,7 +297,15 @@ class MLPDQActorCritic(nn.Module):
         with torch.no_grad():
             # Target actions come from *current* policy
             a2 = self.pi(o2) # a distribution when discrete
-            if isinstance(self.action_space, Discrete):
+            if self.dqn:
+                q_next = torch.min(self.q1(o2), self.q2(o2))
+                a = q_next.argmax(dim=1)
+                q1_pi_targ = self.target.q1(o2, a)
+                q2_pi_targ = self.target.q2(o2, a)
+                q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
+                backup = r + self.gamma * (1 - d) * (q_pi_targ)
+                
+            elif isinstance(self.action_space, Discrete):
                 logp_a2 = torch.log(a2)
                 # Target Q-values
                 q1_pi_targ = self.target.q1(o2)
@@ -317,12 +327,12 @@ class MLPDQActorCritic(nn.Module):
         loss_q = loss_q1 + loss_q2
 
         # Useful info for logging
-        q_info = dict(Q1Vals=q1, Q2Vals=q2)
+        self.logger.log(q_mean=q_pi_targ.mean(), q_hist=q_pi_targ, q_diff=((q1+q2)/2-backup).mean())
         
         if torch.isnan(loss_q):
             pdb.set_trace()
 
-        return loss_q, q_info
+        return loss_q
 
     # Set up function for computing SAC pi loss
     def compute_loss_pi(self, data):
@@ -353,7 +363,7 @@ class MLPDQActorCritic(nn.Module):
     def update(self, data):
         # First run one gradient descent step for Q1 and Q2
         self.q_optimizer.zero_grad()
-        loss_q, q_info = self.compute_loss_q(data)
+        loss_q= self.compute_loss_q(data)
         if not torch.isnan(loss_q):
             loss_q.backward()
             torch.nn.utils.clip_grad_norm_(parameters=self.q_params, max_norm=5, norm_type=2)
@@ -362,7 +372,7 @@ class MLPDQActorCritic(nn.Module):
             print("q loss is nan")
 
         # Record things
-        self.logger.log(q_update=None, loss_q=loss_q/2, **q_info)
+        self.logger.log(q_update=None, loss_q=loss_q/2)
 
         # Freeze Q-networks so you don't waste computational effort 
         # computing gradients for them during the policy learning step.

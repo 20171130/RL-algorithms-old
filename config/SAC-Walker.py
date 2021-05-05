@@ -4,7 +4,6 @@ args.algorithm="sac"
 args.name=f"{args.env}_{args.algorithm}"
 args.gpu=0
 args.seed=0
-args.cpu=4
 
 algo_args = Config()
 algo_args.n_step=4096
@@ -37,7 +36,7 @@ run=wandb.init(
 logger = Logger(run)
 env = gym.make(args.env)
 model = core.MLPDQActorCritic(env.observation_space, env.action_space, logger=logger, **(model_args.toDict()))
-device=0
+device=args.gpu
 model.to(device)
 result =sac(lambda : gym.make(args.env), model=model, logger=logger,  device=device, **(algo_args.toDict()))
 run.finish()
