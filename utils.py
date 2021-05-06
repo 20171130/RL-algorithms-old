@@ -14,11 +14,17 @@ def combined_shape(length, shape=None):
 class Config(object):
     def __init__(self):
         return None
-    def _toDict(self):
+    def _toDict(self, recursive=False):
+        """
+            converts to dict for **kwargs
+            recursive for logging
+        """
         pr = {}
         for name in dir(self):
             value = getattr(self, name)
             if not name.startswith('_') and not name.endswith('_'):
+                if isinstance(value, Config) and recursive:
+                    value = value._toDict(recursive)
                 pr[name] = value
         return pr
     

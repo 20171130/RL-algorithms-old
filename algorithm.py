@@ -49,6 +49,8 @@ def RL(logger, device,
     """ 
     a generic algorithm for model-free reinforcement learning
     plugin state preprocessing if necessary, by wrapping the env
+    warmup:
+        model, q, and policy each warmup for n_warmup steps before used
     """
 
     env, test_env = env_fn(), env_fn()
@@ -96,10 +98,9 @@ def RL(logger, device,
             o, ep_ret, ep_len = env.reset(), 0, 0
 
         # Update handling, can be extended
-        if t >= n_warmup:
-            if t % (n_step//n_update) == 0:
-                batch = replay_buffer.sample_batch(batch_size)
-                agent.updateQ(data=batch)
+        if t % (n_step//n_update) == 0:
+            batch = replay_buffer.sample_batch(batch_size)
+            agent.updateQ(data=batch)
                 
         # End of epoch handling
         if (t+1) % n_step == 0:
