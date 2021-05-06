@@ -1,3 +1,4 @@
+from copy import deepcopy
 from models import *
 """
     Hierarchiy:
@@ -25,8 +26,7 @@ from models import *
 
 class QLearning(nn.Module):
     """ Double Dueling clipped (from TD3) Q Learning"""
-    def __init__(self, q_net, q_args,
-                 gamma, eps, target_sync_rate, logger):
+    def __init__(self, logger, env_fn, q_args, gamma, eps, target_sync_rate):
         """
             q_net is the network class
         """
@@ -35,19 +35,19 @@ class QLearning(nn.Module):
         self.gamma = gamma
         self.target_sync_rate=target_sync_rate
         self.eps = eps
-        self.action_space=action_space
+        self.action_space=env_fn().action_space
 
-        self.q1 = QFunction(q_net, q_args)
-        self.q2 = QFunction(q_net, q_args)
-        self.q1_target = deepcopy(q1)
-        self.q2_target = deepcopy(q2)
+        self.q1 = QCritic(q_args)
+        self.q2 = QCritic(q_args)
+        self.q1_target = deepcopy(self.q1)
+        self.q2_target = deepcopy(self.q2)
         for p in self.q1_target.parameters():
             p.requires_grad = False
         for p in self.q2_target.parameters():
             p.requires_grad = False
             
         self.q_params = itertools.chain(self.q1.parameters(), self.q2.parameters())
-        self.q_optimizer = Adam(self.q_params, lr=q_lr)
+        self.q_optimizer = Adam(self.q_params, lr=q_args['lr'])
         
     def updateQ(self, data):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']

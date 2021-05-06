@@ -1,14 +1,16 @@
+import gym
+
 def count_vars(module):
     return sum([np.prod(p.shape) for p in module.parameters()])
 
 class Config(object):
     def __init__(self):
         return None
-    def toDict(self):
+    def _toDict(self):
         pr = {}
         for name in dir(self):
             value = getattr(self, name)
-            if not name.startswith('__') and not callable(value) and not name.endswith('_'):
+            if not name.startswith('_') and not name.endswith('_'):
                 pr[name] = value
         return pr
     
@@ -73,4 +75,3 @@ class Logger(object):
         
     def flush(self):
         self.logger.log(data={'epoch':self.counters['epoch']}, commit=True)
-        

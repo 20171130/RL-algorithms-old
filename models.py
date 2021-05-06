@@ -20,11 +20,11 @@ def MLP(sizes, activation, output_activation=nn.Identity):
         layers += [nn.Linear(sizes[j], sizes[j+1]), act()]
     return nn.Sequential(*layers)
 
-def CNN(sizes, kernels, strides, paddings, activation, output_activation=nn.Identity):
+def CNN(sizes, kernels, strides, paddings, activation, output_activation=nn.Identity, **kwargs):
     layers = []
     for j in range(len(sizes)-1):
         act = activation if j < len(sizes)-2 else output_activation
-        layers += [nn.Convolution(sizes[j], sizes[j+1], kernels[j], strides[j], paddings[j]), act()]
+        layers += [nn.Conv2d(sizes[j], sizes[j+1], kernels[j], strides[j], paddings[j]), act()]
     return nn.Sequential(*layers)
 
 
@@ -53,8 +53,9 @@ class QCritic(nn.Module):
     if n_embedding > 0, assumes the action space needs embedding
     Notice that the output shape should be 1+action_space.n for discrete dueling Q
     """
-    def __init__(self, q_net, q_args):
+    def __init__(self, q_args):
         super().__init__()
+        q_net = q_args['network']
         self.q = q_net(**q_args)
        
     def forward(self, obs, action=None):

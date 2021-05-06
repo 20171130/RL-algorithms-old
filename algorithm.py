@@ -1,4 +1,3 @@
-from copy import deepcopy
 import pdb
 import numpy as np
 import torch
