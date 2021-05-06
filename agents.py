@@ -26,7 +26,7 @@ from models import *
 
 class QLearning(nn.Module):
     """ Double Dueling clipped (from TD3) Q Learning"""
-    def __init__(self, logger, env_fn, q_args, gamma, eps, target_sync_rate):
+    def __init__(self, logger, env_fn, q_args, gamma, eps, target_sync_rate, **kwargs):
         """
             q_net is the network class
         """
