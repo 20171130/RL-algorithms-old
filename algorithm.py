@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import gym
 import time
+import random
 from tqdm import tqdm
 from utils import combined_shape
 
@@ -21,18 +22,21 @@ class ReplayBuffer:
     def store(self, obs, act, rew, next_obs, done):
         if len(self.data) == self.ptr:
             self.data.append({})
-        self.data[self.ptr] = {'s':obs, 'a':act, 'r':rew, 's1':next_obs, 'd':done}
+        self.data[self.ptr] = {'s':obs, 'a':act, 'r':rew, 's1':next_obs, 'd':float(done)}
         # lazy frames here
         # cuts Q bootstrap if done (next_obs is arbitrary)
         self.ptr = (self.ptr+1) % self.max_size
         
     def sample_batch(self, batch_size):
         idxs = np.random.randint(0, len(self.data), size=batch_size)
-        raw_batch = self.data[idxs]
+        raw_batch = [self.data[i] for i in idxs]
         batch = {}
         for key in raw_batch[0]:
-            lst = [torch.as_tensor(dic[key]) for dic in raw_batch]
-            batch[key] = torch.stack(lst).to(device)
+            try:
+                lst = [torch.as_tensor(dic[key]) for dic in raw_batch]
+                batch[key] = torch.stack(lst).to(self.device)
+            except:
+                pdb.set_trace()
         return batch
 
 
@@ -55,31 +59,26 @@ def RL(logger, device,
     
     pbar = iter(tqdm(range(n_epoch)))
 
-
-    # Count variables (protip: try to get a feel for how different size networks behave!)
-    var_counts = tuple(count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
-    print('\nNumber of parameters: \t pi: %d, \t q1: %d, \t q2: %d\n'%var_counts)
-
     def test_agent():
         for j in range(n_test):
             o, d, ep_ret, ep_len = test_env.reset(), False, 0, 0
             while not(d or (ep_len == max_ep_len)):
                 # Take deterministic actions at test time 
-                action = ac.act(torch.as_tensor(o,  dtype=torch.float).to(device), True)
+                action = agent.act(torch.as_tensor(o,  dtype=torch.float).to(device), True)
                 o, r, d, _ = test_env.step(action.cpu().numpy())
                 ep_ret += r
                 ep_len += 1
             logger.log(TestEpRet=ep_ret, TestEpLen=ep_len, testEpisode=None)
 
     # Prepare for interaction with environment
-    total_steps = n_step * epochs
+    total_steps = n_step * n_epoch
     start_time = time.time()
     o, ep_ret, ep_len = env.reset(), 0, 0
 
     # Main loop: collect experience in env and update/log each epoch
     for t in range(total_steps):
         if t >= n_warmup:
-            a = ac.act(torch.as_tensor(o,  dtype=torch.float).to(device))
+            a = agent.act(torch.as_tensor(o,  dtype=torch.float).to(device))
             a = a.detach().cpu().numpy()
         else:
             a = env.action_space.sample()
@@ -99,7 +98,7 @@ def RL(logger, device,
         if t >= n_warmup:
             if t % (n_step//n_update) == 0:
                 batch = replay_buffer.sample_batch(batch_size)
-                ac.update(data=batch)
+                agent.updateQ(data=batch)
                 
         # End of epoch handling
         if (t+1) % n_step == 0:

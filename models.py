@@ -27,8 +27,6 @@ def CNN(sizes, kernels, strides, paddings, activation, output_activation=nn.Iden
         layers += [nn.Conv2d(sizes[j], sizes[j+1], kernels[j], strides[j], paddings[j]), act()]
     return nn.Sequential(*layers)
 
-
-
 class WorldModel(nn.Module):
 
     def __init__(self, obs_dim, hidden_sizes, activation):
@@ -53,16 +51,19 @@ class QCritic(nn.Module):
     if n_embedding > 0, assumes the action space needs embedding
     Notice that the output shape should be 1+action_space.n for discrete dueling Q
     """
-    def __init__(self, q_args):
+    def __init__(self, env_fn, **q_args):
         super().__init__()
         q_net = q_args['network']
+        self.action_space=env_fn().action_space
         self.q = q_net(**q_args)
        
     def forward(self, obs, action=None):
-        if self.action_space == 'continous':
+        if isinstance(self.action_space, Box):
             q = self.q(torch.cat([obs, action], dim=-1))
         else:
-            q = self.q(obs) 
+            q = self.q(obs)
+            while len(q.shape) > 2:
+                q = q.squeeze(-1) # HW of size 1 if CNN
             # [b, a+1]
             v = q[:, -1:]
             q = q[:, :-1]

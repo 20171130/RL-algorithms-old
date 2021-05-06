@@ -1,5 +1,7 @@
 import gym
 import numpy as np
+import random
+import torch
 
 def count_vars(module):
     return sum([np.prod(p.shape) for p in module.parameters()])

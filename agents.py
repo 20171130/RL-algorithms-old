@@ -37,8 +37,8 @@ class QLearning(nn.Module):
         self.eps = eps
         self.action_space=env_fn().action_space
 
-        self.q1 = QCritic(q_args)
-        self.q2 = QCritic(q_args)
+        self.q1 = QCritic(**q_args._toDict())
+        self.q2 = QCritic(**q_args._toDict())
         self.q1_target = deepcopy(self.q1)
         self.q2_target = deepcopy(self.q2)
         for p in self.q1_target.parameters():
@@ -47,10 +47,10 @@ class QLearning(nn.Module):
             p.requires_grad = False
             
         self.q_params = itertools.chain(self.q1.parameters(), self.q2.parameters())
-        self.q_optimizer = Adam(self.q_params, lr=q_args['lr'])
+        self.q_optimizer = Adam(self.q_params, lr=q_args.lr)
         
     def updateQ(self, data):
-        o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
+        o, a, r, o2, d = data['s'], data['a'], data['r'], data['s1'], data['d']
 
         q1 = self.q1(o, a)
         q2 = self.q2(o, a)
@@ -58,11 +58,10 @@ class QLearning(nn.Module):
         # Bellman backup for Q functions
         with torch.no_grad():
             # Target actions come from *current* policy
-            a2 = self.pi(o2) # a distribution when discrete
             q_next = torch.min(self.q1(o2), self.q2(o2))
             a = q_next.argmax(dim=1)
-            q1_pi_targ = self.target.q1(o2, a)
-            q2_pi_targ = self.target.q2(o2, a)
+            q1_pi_targ = self.q1_target(o2, a)
+            q2_pi_targ = self.q2_target(o2, a)
             q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
             backup = r + self.gamma * (1 - d) * (q_pi_targ)
 
@@ -94,9 +93,7 @@ class QLearning(nn.Module):
     def act(self, o, deterministic=False):
         """returns a scalar, not differentiable"""
         with torch.no_grad():
-            if len(o.shape) == 1:
-                o = o.unsqueeze(0)
-
+            o = o.unsqueeze(0)
             q1 = self.q1(o)
             q2 = self.q2(o)
             q = torch.min(q1, q2)
