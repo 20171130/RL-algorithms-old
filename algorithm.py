@@ -77,6 +77,7 @@ def RL(logger, device,
 
     # Main loop: collect experience in env and update/log each epoch
     for t in range(total_steps):
+        logger.log(interaction=None)
         if t >= n_warmup:
             a = agent.act(torch.as_tensor(o,  dtype=torch.float).to(device))
             a = a.detach().cpu().numpy()
@@ -102,14 +103,12 @@ def RL(logger, device,
                 
         # End of epoch handling
         if (t+1) % n_step == 0:
-            epoch = (t+1) // n_step
             next(pbar)
 
             # Test the performance of the deterministic version of the agent.
             test_agent()
             # Log info about epoch
             logger.log(epoch=None)
-            logger.log(TotalEnvInteracts=t)
             logger.flush()
     
     return ac
