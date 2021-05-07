@@ -145,7 +145,7 @@ def RL(logger, device,
         o, d, ep_ret, ep_len = test_env.reset(), False, 0, 0
         while not(d or (ep_len == max_ep_len)):
             # Take deterministic actions at test time 
-            action = agent.act(torch.as_tensor(o,  dtype=torch.float).to(device), True)
+            action = agent.act(torch.as_tensor(o,  dtype=torch.float).to(device), deterministic=True)
             o, r, d, _ = test_env.step(action.cpu().numpy())
             ep_ret += r
             ep_len += 1
@@ -160,11 +160,10 @@ def RL(logger, device,
     for t in range(n_step): 
         logger.log(interaction=None)
         if t >= act_start:
-            a = agent.act(torch.as_tensor(o,  dtype=torch.float).to(device))
-            a = a.detach().cpu().numpy()
-        else:
-            a = env.action_space.sample()
-
+            agent.random = False
+            
+        a = agent.act(torch.as_tensor(o,  dtype=torch.float).to(device))    
+        a = a.detach().cpu().numpy()[0]
         # Step the env
         o2, r, d, _ = env.step(a)
         ep_ret += r
@@ -182,7 +181,8 @@ def RL(logger, device,
             buffer.clear()
             batch = env_buffer.iterBatch(batch_size)
             while not batch is None and len(buffer.data) < buffer.max_size:
-                s, a, r, s1, d = batch['s'], batch['a'], batch['r'], batch['s1'], batch['d']
+                s = batch['s']
+                a = agent.act(s, batched=True)
                 for i in range(p_args.branch):
                     r, s1, d = agent.roll(s, a)
                     buffer.store(s, a, r, s1, d)

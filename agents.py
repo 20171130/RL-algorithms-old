@@ -113,6 +113,8 @@ class SAC(QLearning):
         super().__init__(logger, env_fn, q_args, gamma, 0, target_sync_rate, **kwargs)
         # eps = 0
         self.alpha = alpha
+        self.random = True # unset this after warmup
+        self.action_space = env_fn().action_space
         if isinstance(self.action_space, Box): #continous
             self.pi = SquashedGaussianActor(**pi_args._toDict())
         else:
@@ -120,6 +122,18 @@ class SAC(QLearning):
         self.pi_optimizer = Adam(self.pi.parameters(), lr=pi_args.lr)
 
     def act(self, o, deterministic=False, batched=False):
+        """
+            not differentiable
+            called during env interaction and model rollout
+            not used when updating q
+        """
+        if self.random and not deterministic:
+            if batched:
+                probs = torch.ones(o.shape[0], self.action_space.n)/self.action_space.n
+                return Categorical(probs).sample()
+            else:
+                probs = torch.ones(1, self.action_space.n)/self.action_space.n
+                return Categorical(probs).sample()
         with torch.no_grad():
             if not batched:
                 o = o.unsqueeze(0)
