@@ -1,6 +1,10 @@
 from utils import Config
 from models import CNN
 from agents import QLearning
+import gym
+import torch
+import numpy as np
+from utils import Logger
 """
     notice that 50M samples is typical for DQNs with visual input (refer to rainbow)
     
@@ -17,7 +21,7 @@ algo_args.n_warmup=int(2e5)
 algo_args.replay_size=int(1e6)
 algo_args.test_interval = int(3e4)
 algo_args.seed=0
-algo_args.save_interval=int(1e6)
+algo_args.save_interval=600
 algo_args.log_interval=int(2e3)
 algo_args.n_step=int(1e8)
 

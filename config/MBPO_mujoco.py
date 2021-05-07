@@ -1,8 +1,12 @@
 from utils import Config
 from models import MLP
+import gym
+import torch
+import numpy as np
+from utils import Logger
 from agents import MBPO
 """
-    the hyperparameters are the same as MBPO
+    the hyperparameters are the same as MBPO, almost the same on Mujoco and Inverted Pendulum
 """
 algo_args = Config()
 
