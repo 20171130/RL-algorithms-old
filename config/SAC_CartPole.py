@@ -54,7 +54,7 @@ pi_args.sizes = [4, 16, 32, 64, 128, 128, 2]
 agent_args=Config()
 agent_args.agent=SAC
 agent_args.gamma=0.99
-agent_args.alpha=0.2/50 # 50 frames 1 reward is typical
+agent_args.alpha=0.2 
 agent_args.target_sync_rate=q_args.update_interval/32000
 
 args = Config()
