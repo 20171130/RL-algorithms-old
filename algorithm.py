@@ -17,9 +17,11 @@ class ReplayBuffer:
         self.max_size = max_size
         self.data = []
         self.ptr = 0
+        self.read_ptr = 0
         self.device = device
 
-    def store(self, obs, act, rew, next_obs, done):
+    def _store(self, obs, act, rew, next_obs, done):
+        """ not batched """
         if len(self.data) == self.ptr:
             self.data.append({})
         self.data[self.ptr] = {'s':obs, 'a':act, 'r':rew, 's1':next_obs, 'd':float(done)}
@@ -27,7 +29,16 @@ class ReplayBuffer:
         # cuts Q bootstrap if done (next_obs is arbitrary)
         self.ptr = (self.ptr+1) % self.max_size
         
-    def sample_batch(self, batch_size):
+    def store(self, obs, act, rew, next_obs, done):
+        """ can be batched"""
+        if done.shape == 1: # batched
+            for i in range(done.shape[0])
+                self.data[self.ptr] = {'s':obs[i], 'a':act[i], 'r':rew[i], 's1':next_obs[i], 'd':float(done[i])}
+        else:
+            self._store(obs, act, rew, next_obs, done)
+
+        
+    def sampleBatch(self, batch_size):
         idxs = np.random.randint(0, len(self.data), size=batch_size)
         raw_batch = [self.data[i] for i in idxs]
         batch = {}
@@ -38,6 +49,31 @@ class ReplayBuffer:
             except:
                 pdb.set_trace()
         return batch
+    
+    def iterBatch(self, batch_size):
+        if self.read_ptr >= len(self.data):
+            self._rewind()
+            return None
+        
+        idxs = list(range(self.read_ptr, min(self.read_ptr+batch_size, len(self.data))))
+        self.read_ptr += self.batch_size
+        raw_batch = [self.data[i] for i in idxs]
+        batch = {}
+        for key in raw_batch[0]:
+            try:
+                lst = [torch.as_tensor(dic[key]) for dic in raw_batch]
+                batch[key] = torch.stack(lst).to(self.device)
+            except:
+                pdb.set_trace()
+        return batch
+    
+    def clear(self):
+        self.data = []
+        self.ptr = 0
+        self.read_ptr = 0
+        
+    def _rewind(self):
+        self.read_ptr = 0
 
 
 
@@ -56,16 +92,20 @@ def RL(logger, device,
     """
     torch.manual_seed(seed)
     np.random.seed(seed)
-    
-    env, test_env = env_fn(), env_fn()
-    observation_space = env.observation_space
-    action_space = env.action_space
-    # Experience buffer
-    replay_buffer = ReplayBuffer(max_size=replay_size, device=device)
+
     agent = agent_args.agent(logger=logger, **agent_args._toDict())
     agent = agent.to(device)
+    
     pbar = iter(tqdm(range(int(1e6))))
     
+    # Experience buffer
+    env_buffer = ReplayBuffer(max_size=replay_size, device=device)
+    if hasattr(agent, "p"): # use the model buffer if there is a model
+        buffer = ReplayBuffer(max_size=replay_size, device=device)
+    else:
+        buffer = env_buffer  
+    
+    # warmups
     if hasattr(agent, "p"):
         q_update_start = n_warmup 
         # p and q starts at the same time, since q update also need p
@@ -104,23 +144,34 @@ def RL(logger, device,
         ep_ret += r
         ep_len += 1
         d = False if ep_len==max_ep_len else d
-        replay_buffer.store(o, a, r, o2, d)
+        env_buffer.store(o, a, r, o2, d)
         o = o2
         if d or (ep_len == max_ep_len):
             logger.log(EpRet=ep_ret, EpLen=ep_len, episode=None)
             o, ep_ret, ep_len = env.reset(), 0, 0
 
+        if hasattr(agent, "p") and t% p_args.refresh_interval == 0:
+            env_buffer.rewind()
+            buffer.clear()
+            batch = env_buffer.iterBatch()
+            while not batch is None:
+                s, a, r, s1, d = data['s'], data['a'], data['r'], data['s1'], data['d']
+                for i in range(p_args.branch):
+                    r, s1, d = agent.roll(s, a)
+                    buffer.store(s, a, r, s1, d)
+                batch = env_buffer.iterBatch()
+                        
         # Update handling
         if hasattr(agent, "p")  and t % (p_update_interval) == 0:
-            batch = replay_buffer.sample_batch(batch_size)
+            batch = env_buffer.sampleBatch(batch_size)
             agent.updateP(data=batch)
             
         if hasattr(agent, "q1") and t>q_update_start and t % (q_update_interval) == 0:
-            batch = replay_buffer.sample_batch(batch_size)
+            batch = buffer.sampleBatch(batch_size)
             agent.updateQ(data=batch)
             
         if hasattr(agent, "pi") and t>pi_update_start and t % (pi_update_interval) == 0:
-            batch = replay_buffer.sample_batch(batch_size)
+            batch = buffer.sampleBatch(batch_size)
             agent.updatePi(data=batch)
                 
         if (t+1) % save_interval == 0:

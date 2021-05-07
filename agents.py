@@ -242,7 +242,7 @@ class MBPO(SAC):
         self.p_optimizer.step()
         return None
     
-    def unroll(self, s):
+    def roll(self, s):
         """ batched """
         p = self.ps[np.randint(self.n_p)]
         
