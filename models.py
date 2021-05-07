@@ -35,8 +35,9 @@ class ParameterizedModel(nn.Module):
         unlike the critic and the actor class, 
         the sizes argument does not include the dim of the state
     """
-    def __init__(self, env_fn, **net_args):
+    def __init__(self, env_fn, logger, **net_args):
         super().__init__()
+        self.logger = logger
         self.action_space=env_fn().action_space
         observation_dim=env_fn().observation_space[0]
         input_dim = net_args['sizes'][0]
@@ -78,7 +79,7 @@ class ParameterizedModel(nn.Module):
             reward_loss = self.MSE(reward)
             done_loss = self.MSE(done).mean(dim = 1)
             
-            logger.log(state_loss=state_loss, reward_loss=reward_loss, done_loss=done_loss)
+            self.logger.log(state_loss=state_loss, reward_loss=reward_loss, done_loss=done_loss)
             return state_loss+reward_loss+done_loss
         
     

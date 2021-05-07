@@ -117,23 +117,24 @@ class SAC(QLearning):
             self.pi = CategoricalActor(**pi_args._toDict())
         self.pi_optimizer = Adam(self.pi.parameters(), lr=pi_args.lr)
 
-    def act(self, o, deterministic=False):
-        """not batched"""
+    def act(self, o, deterministic=False, batched=False):
         with torch.no_grad():
-            o = o.unsqueeze(0)
+            if not batched:
+                o = o.unsqueeze(0)
             if isinstance(self.action_space, Discrete):
                 a = self.pi(o)
                 if (torch.isnan(a).any()):
                     print('action is nan!')
                     pdb.set_trace()
                 elif deterministic:
-                    a = a.argmax(dim=1)[0]
+                    a = a.argmax(dim=1)
                 else:
-                    a = Categorical(a[0]).sample()
+                    a = Categorical(a).sample()
             else:
                 a = self.pi(o, deterministic)
                 if isinstance(a, tuple):
                     a = a[0]
+            if not batched:
                 a = a.squeeze(dim=0)
             return a.detach()
     
@@ -223,56 +224,33 @@ class MBPO(SAC):
         super().__init__(logger, env_fn, q_args, pi_args, alpha, gamma, target_sync_rate, **kwargs)
         self.n_p = 7
         if isinstance(self.action_space, Box): #continous
-            ps = [RegressionModel(p_args) for i in range(self.n_p)]
+            ps = [None for i in range(self.n_p)]
         else:
-            ps = [CategoricalActor(p_args) for i in range(self.n_p)]
+            ps = [ParameterizedModel(env_fn, logger,**p_args) for i in range(self.n_p)]
         self.ps = nn.ModuleList(ps)
         self.p_params = itertools.chain([item.parameters() for item in self.ps])
         self.p_optimizer = Adam(self.p_params, lr=p_args.lr)
         
     def updateP(self, data):
+        o, a, r, o2, d = data['s'], data['a'], data['r'], data['s1'], data['d']
+        loss = 0
+
+        for i in range(self.n_p):
+            loss = loss + self.ps[i](o, a, r, o2, d)
+        self.p_optimizer.zero_grad()
+        loss.backward()
+        self.p_optimizer.step()
         return None
     
-    def unroll(self, s, a):
-        """ not batched """
-        
+    def unroll(self, s):
+        """ batched """
         p = self.ps[np.randint(self.n_p)]
         
         with torch.no_grad():
-            o = o.unsqueeze(0)
             if isinstance(self.action_space, Discrete):
-                a = self.pi(o)
-                if (torch.isnan(a).any()):
-                    print('action is nan!')
-                    pdb.set_trace()
-                elif deterministic:
-                    a = a.argmax(dim=1)[0]
-                else:
-                    a = Categorical(a[0]).sample()
+                a = self.act(s, determinsitc=False, batched=True)
+                s1, r, d = p(s, a)
             else:
-                a = self.pi(o, deterministic)
-                if isinstance(a, tuple):
-                    a = a[0]
-                a = a.squeeze(dim=0)
+                return None
                 
-        return s1, r, d
-    
-    def act(self, o, deterministic=False):
-        """not batched"""
-        with torch.no_grad():
-            o = o.unsqueeze(0)
-            if isinstance(self.action_space, Discrete):
-                a = self.pi(o)
-                if (torch.isnan(a).any()):
-                    print('action is nan!')
-                    pdb.set_trace()
-                elif deterministic:
-                    a = a.argmax(dim=1)[0]
-                else:
-                    a = Categorical(a[0]).sample()
-            else:
-                a = self.pi(o, deterministic)
-                if isinstance(a, tuple):
-                    a = a[0]
-                a = a.squeeze(dim=0)
-            return a.detach()
+        return s, a, s1, r, d
