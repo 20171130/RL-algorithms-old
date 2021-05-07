@@ -31,8 +31,8 @@ class ReplayBuffer:
         
     def store(self, obs, act, rew, next_obs, done):
         """ can be batched"""
-        if done.shape == 1: # batched
-            for i in range(done.shape[0])
+        if not isinstance(done, bool): # batched
+            for i in range(done.shape[0]):
                 self.data[self.ptr] = {'s':obs[i], 'a':act[i], 'r':rew[i], 's1':next_obs[i], 'd':float(done[i])}
         else:
             self._store(obs, act, rew, next_obs, done)
@@ -92,7 +92,7 @@ def RL(logger, device,
     """
     torch.manual_seed(seed)
     np.random.seed(seed)
-
+    p_args, q_args, pi_args = agent_args.p_args, agent_args.q_args, agent_args.pi_args
     agent = agent_args.agent(logger=logger, **agent_args._toDict())
     agent = agent.to(device)
     
@@ -104,17 +104,30 @@ def RL(logger, device,
         buffer = ReplayBuffer(max_size=replay_size, device=device)
     else:
         buffer = env_buffer  
-    
+
     # warmups
-    if hasattr(agent, "p"):
+    if hasattr(agent, "ps"):
         q_update_start = n_warmup 
         # p and q starts at the same time, since q update also need p
-        p_update_start = n_warmup
-        act_tart = 2*n_warmup
+        pi_update_start = n_warmup
+        act_start = 2*n_warmup
     else:
         q_update_start = 0
         pi_update_start = 0
         act_start = n_warmup
+        
+    # multiple gradient steps per sample if model based RL
+    q_update_steps = 1
+    pi_update_steps = 1
+    p_update_interval = p_args.update_interval
+    q_update_interval = q_args.update_interval
+    pi_update_interval = pi_args.update_interval
+    if q_update_interval < 1:
+        q_update_steps = int(1/q_update_interval)
+        q_update_interval = 1
+    if pi_update_interval < 1:
+        pi_update_steps = int(1/pi_update_interval)
+        pi_update_interval = 1
 
     def test_agent():
         o, d, ep_ret, ep_len = test_env.reset(), False, 0, 0
@@ -128,6 +141,7 @@ def RL(logger, device,
 
     # Prepare for interaction with environment
     start_time = time.time()
+    env, test_env = env_fn(), env_fn()
     o, ep_ret, ep_len = env.reset(), 0, 0
 
     # Main loop: collect experience in env and update/log each epoch
@@ -150,11 +164,12 @@ def RL(logger, device,
             logger.log(EpRet=ep_ret, EpLen=ep_len, episode=None)
             o, ep_ret, ep_len = env.reset(), 0, 0
 
-        if hasattr(agent, "p") and t% p_args.refresh_interval == 0:
-            env_buffer.rewind()
+        # model rollout
+        if hasattr(agent, "ps") and t% p_args.refresh_interval == 0 and t >n_warmup:
+            env_buffer._rewind()
             buffer.clear()
-            batch = env_buffer.iterBatch()
-            while not batch is None:
+            batch = env_buffer.iterBatch(batch_size)
+            while not batch is None and len(buffer.data) < buffer.max_size:
                 s, a, r, s1, d = data['s'], data['a'], data['r'], data['s1'], data['d']
                 for i in range(p_args.branch):
                     r, s1, d = agent.roll(s, a)
@@ -162,17 +177,19 @@ def RL(logger, device,
                 batch = env_buffer.iterBatch()
                         
         # Update handling
-        if hasattr(agent, "p")  and t % (p_update_interval) == 0:
+        if hasattr(agent, "ps")  and (t % p_update_interval) == 0 and t>batch_size:
             batch = env_buffer.sampleBatch(batch_size)
             agent.updateP(data=batch)
             
-        if hasattr(agent, "q1") and t>q_update_start and t % (q_update_interval) == 0:
-            batch = buffer.sampleBatch(batch_size)
-            agent.updateQ(data=batch)
+        if hasattr(agent, "q1") and t>q_update_start and t % q_update_interval == 0:
+            for i in range(q_update_steps):
+                batch = buffer.sampleBatch(batch_size)
+                agent.updateQ(data=batch)
             
-        if hasattr(agent, "pi") and t>pi_update_start and t % (pi_update_interval) == 0:
-            batch = buffer.sampleBatch(batch_size)
-            agent.updatePi(data=batch)
+        if hasattr(agent, "pi") and t>pi_update_start and t % pi_update_interval == 0:
+            for i in range(pi_update_steps):
+                batch = buffer.sampleBatch(batch_size)
+                agent.updatePi(data=batch)
                 
         if (t+1) % save_interval == 0:
             logger.save(agent)

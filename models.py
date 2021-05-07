@@ -39,21 +39,22 @@ class ParameterizedModel(nn.Module):
         super().__init__()
         self.logger = logger
         self.action_space=env_fn().action_space
-        observation_dim=env_fn().observation_space[0]
+        observation_dim=env_fn().observation_space.shape[0]
         input_dim = net_args['sizes'][0]
         output_dim = net_args['sizes'][-1]
         if isinstance(self.action_space, Discrete):
             self.action_embedding = nn.Embedding(self.action_space.n,input_dim)
-        self.net = mlp(**net_args)
-        self.state_head = nn.Linear(output_dim, self.observation_dim)
+        self.net = MLP(**net_args)
+        self.state_head = nn.Linear(output_dim, observation_dim)
         self.reward_head = nn.Linear(output_dim, 1)
         self.done_head = nn.Linear(output_dim, 1)
-        self.MSE = nn.MESLoss(reduction='none')
-        self.BCE = nn.BCEwithLogitLoss(reduction='none')
+        self.MSE = nn.MSELoss(reduction='none')
+        self.BCE = nn.BCEWithLogitsLoss(reduction='none')
 
     def forward(self, s, a, r=None, s1=None, d=None):
         if r is None: #inference
             with torch.no_grad():
+                pdb.set_trace()
                 embedding = s
                 if isinstance(self.action_space, Discrete):
                     embedding = embedding + self.action_embedding(a)
@@ -75,11 +76,16 @@ class ParameterizedModel(nn.Module):
             reward = self.reward_head(embedding).squeeze(1)
             done = self.done_head(embedding).squeeze(1)
             
-            state_loss = self.MSE(state).mean(dim = 1)
-            reward_loss = self.MSE(reward)
-            done_loss = self.MSE(done).mean(dim = 1)
+            state_loss = self.MSE(state, s1).mean(dim = 1)
+            reward_loss = self.MSE(reward, r)
+            done_loss = self.BCE(done, d)
+            done = done > 0
+
+            done_true_positive = (done*d).mean()
+            d = d.mean()
             
             self.logger.log(state_loss=state_loss, reward_loss=reward_loss, done_loss=done_loss)
+            self.logger.log(done_true_positive=done_true_positive, done=d, rolling=100)
             return state_loss+reward_loss+done_loss
         
     

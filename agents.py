@@ -222,13 +222,13 @@ class MBPO(SAC):
             q_net is the network class
         """
         super().__init__(logger, env_fn, q_args, pi_args, alpha, gamma, target_sync_rate, **kwargs)
-        self.n_p = 7
+        self.n_p = p_args.n_p
         if isinstance(self.action_space, Box): #continous
             ps = [None for i in range(self.n_p)]
         else:
-            ps = [ParameterizedModel(env_fn, logger,**p_args) for i in range(self.n_p)]
+            ps = [ParameterizedModel(env_fn, logger,**p_args._toDict()) for i in range(self.n_p)]
         self.ps = nn.ModuleList(ps)
-        self.p_params = itertools.chain([item.parameters() for item in self.ps])
+        self.p_params = itertools.chain(*[item.parameters() for item in self.ps])
         self.p_optimizer = Adam(self.p_params, lr=p_args.lr)
         
     def updateP(self, data):
@@ -238,7 +238,7 @@ class MBPO(SAC):
         for i in range(self.n_p):
             loss = loss + self.ps[i](o, a, r, o2, d)
         self.p_optimizer.zero_grad()
-        loss.backward()
+        loss.sum().backward()
         self.p_optimizer.step()
         return None
     

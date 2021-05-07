@@ -61,15 +61,17 @@ class Logger(object):
         supports both .log(data={key: value}) and .log(key=value) 
     custom x axis (wandb is buggy about this)
     """
-    def __init__(self, args):
-        run=wandb.init(
-            project="RL",
-            config=args._toDict(recursive=True),
-            name=args.name,
-            group=args.env_name,
-        )
+    def __init__(self, args, mute=False):
+        if not mute:
+            run=wandb.init(
+                project="RL",
+                config=args._toDict(recursive=True),
+                name=args.name,
+                group=args.env_name,
+            )
+            self.logger = run
+        self.mute = mute
         self.args = args
-        self.logger = run
         self.buffer = {}
         self.step_key = 'interaction'
         
@@ -77,7 +79,7 @@ class Logger(object):
         exists_or_mkdir(f"checkpoints/{args.name}")
         torch.save(model.state_dict(), open(f"checkpoints/{args.name}/{self.counters['epoch']}.pt", 'wb'))
         
-    def log(self, data=None, step=None, **kwargs):
+    def log(self, data=None, rolling=None, **kwargs):
         if data is None:
             data = {}
         data.update(kwargs)
@@ -101,7 +103,11 @@ class Logger(object):
                     print(f'{key} is nan!')
                     pdb.set_trace()
                     continue
-                self.buffer[key] = data[key]
+                if rolling and key in self.buffer:
+                    self.buffer[key] = self.buffer[key]*(1-1/rolling) + data[key]/rolling
+                else:
+                    self.buffer[key] = data[key]
                 
     def flush(self):
-        self.logger.log(data=self.buffer, step =self.buffer[self.step_key], commit=True)
+        if not self.mute:
+            self.logger.log(data=self.buffer, step =self.buffer[self.step_key], commit=True)
