@@ -79,17 +79,22 @@ class Logger(object):
         exists_or_mkdir(f"checkpoints/{args.name}")
         torch.save(model.state_dict(), open(f"checkpoints/{args.name}/{self.counters['epoch']}.pt", 'wb'))
         
-    def log(self, data=None, rolling=None, **kwargs):
-        if data is None:
-            data = {}
-        data.update(kwargs)
-
+    def log(self, raw_data=None, rolling=None, **kwargs):
+        if raw_data is None:
+            raw_data = {}
+        raw_data.update(kwargs)
+        
+        data = {}
+        for key in raw_data: # computes the mean for histograms
+            data[key] = raw_data[key]
+            if isinstance(data[key], torch.Tensor) and len(data[key].shape)>0:
+                data[key+'_mean'] = data[key].mean()
+            
         for key in data:
             if data[key] is None:
                 if not key in self.buffer:
                     self.buffer[key] = 0
                 self.buffer[key] += 1
-                
             else:
                 valid = True
                 # check nans

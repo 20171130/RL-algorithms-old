@@ -86,7 +86,7 @@ class ParameterizedModel(nn.Module):
             
             self.logger.log(state_loss=state_loss, reward_loss=reward_loss, done_loss=done_loss)
             self.logger.log(done_true_positive=done_true_positive, done=d, rolling=100)
-            return state_loss+reward_loss+done_loss
+            return state_loss+reward_loss+10*done_loss
         
     
 class VCritic(nn.Module):

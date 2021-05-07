@@ -6,12 +6,13 @@ from agents import MBPO
 """
 algo_args = Config()
 
-algo_args.n_warmup=int(5e3)
+algo_args.n_warmup=int(2e3)
 """
- rainbow said 2e5 is typical for Qlearning
- 400 is the model ampilifier, 2e5/400 yields 500, larget than batch size of p
- total number of sampels required is only 100K
- for parameterized input continous motion control
+ rainbow said 2e5 samples or 5e4 updates is typical for Qlearning
+ bs256lr3e-4, it takes 2e4updates
+ for the model on CartPole to learn done...
+
+ Only 3e5 samples are needed for parameterized input continous motion control
 """
 algo_args.replay_size=int(1e6)
 algo_args.max_ep_len=500
@@ -27,11 +28,15 @@ p_args.network = MLP
 p_args.activation=torch.nn.ReLU
 p_args.lr=3e-4
 p_args.sizes = [4, 16, 32, 3] 
-p_args.update_interval=4
-# from rainbow, MBPO retrains fram scratch periodically
+p_args.update_interval=1/10
+"""
+ bs=32 interval=4 from rainbow Q
+ MBPO retrains fram scratch periodically
+ in principle this can be arbitrarily frequent
+"""
 p_args.n_p=7 # ensemble
-p_args.refresh_interval=int(2e4) # refreshes the model buffer
-# MBPO used model_retain_epochs=20, epoch len = 1000 for ant, 250 for inverted pendulum
+p_args.refresh_interval=int(1e3) # refreshes the model buffer
+# ideally rollouts should be used only once
 p_args.branch=400
 p_args.roll_length=1 # length > 1 not implemented yet
 
@@ -74,5 +79,5 @@ agent_args.pi_args = pi_args
 algo_args.agent_args = agent_args
 args.algo_args = algo_args # do not call toDict() before config is set
 
-assert(p_args.refresh_interval/q_args.update_interval*algo_args.batch_size > algo_args.replay_size)
-# other wise not all generated data used before flushed
+print(f"rollout reuse:{(p_args.refresh_interval/q_args.update_interval*algo_args.batch_size)/algo_args.replay_size}")
+# each generated data will be used so many times

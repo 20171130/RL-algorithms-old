@@ -71,7 +71,7 @@ class QLearning(nn.Module):
         loss_q = loss_q1 + loss_q2
 
         # Useful info for logging
-        self.logger.log(q_mean=q_pi_targ.mean(), q_hist=q_pi_targ, q_diff=((q1+q2)/2-backup).mean())
+        self.logger.log(q=q_pi_targ, q_diff=((q1+q2)/2-backup).mean())
 
         # First run one gradient descent step for Q1 and Q2
         self.q_optimizer.zero_grad()

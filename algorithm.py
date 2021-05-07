@@ -117,6 +117,7 @@ def RL(logger, device,
         act_start = n_warmup
         
     # multiple gradient steps per sample if model based RL
+    p_update_steps = 1
     q_update_steps = 1
     pi_update_steps = 1
     p_update_interval = p_args.update_interval
@@ -128,6 +129,9 @@ def RL(logger, device,
     if pi_update_interval < 1:
         pi_update_steps = int(1/pi_update_interval)
         pi_update_interval = 1
+    if p_update_interval < 1:
+        p_update_steps = int(1/p_update_interval)
+        p_update_interval = 1
 
     def test_agent():
         o, d, ep_ret, ep_len = test_env.reset(), False, 0, 0
@@ -178,8 +182,9 @@ def RL(logger, device,
                         
         # Update handling
         if hasattr(agent, "ps")  and (t % p_update_interval) == 0 and t>batch_size:
-            batch = env_buffer.sampleBatch(batch_size)
-            agent.updateP(data=batch)
+            for i in range(p_update_steps):
+                batch = env_buffer.sampleBatch(batch_size)
+                agent.updateP(data=batch)
             
         if hasattr(agent, "q1") and t>q_update_start and t % q_update_interval == 0:
             for i in range(q_update_steps):
