@@ -2,7 +2,7 @@ import gym
 import numpy as np
 import random
 import torch
-from utils import Logger
+import wandb
 
 
 def count_vars(module):
@@ -55,6 +55,9 @@ class Logger(object):
     to prevent the log becoming too big
     uses kwargs instead of dict for convenience
     all None valued keys are counters
+    
+    for RL, there is not a natural notion of an "epoch",
+    set frequency = 1 for one log per epoch
     """
     def __init__(self, args):
         run=wandb.init(
@@ -64,9 +67,10 @@ class Logger(object):
             group=args.env_name,
         )
         self.args = args
-        self.logger = Logger(run)
+        self.logger = run
         self.counters = {'epoch':0}
-        self.frequency = 10 # logs per epoch
+        self.frequency = 1 # one log per epoch
+        self.step_key = 'interaction'
         
     def save(self, model):
         exists_or_mkdir(f"checkpoints/{args.name}")
@@ -105,7 +109,7 @@ class Logger(object):
                     to_store[key] = data[key]
                 
         if len(to_store) > 0:
-            self.logger.log(to_store, commit=True)
+            self.logger.log(to_store, step =self.counters[self.step_key], commit=True)
         
     def flush(self):
-        self.logger.log(data={'epoch':self.counters['epoch']}, commit=True)
+        self.logger.log(data={'epoch':self.counters['epoch']}, step =self.counters[self.step_key], commit=True)

@@ -139,7 +139,7 @@ class SAC(QLearning):
         super().__init__(logger, env_fn, q_args, gamma, 0, target_sync_rate, **kwargs)
         # eps = 0
         self.alpha = alpha
-        if isinstance(self.action_space, gym.Box): #continous
+        if isinstance(self.action_space, Box): #continous
             self.pi = SquashedGaussianActor(**pi_args._toDict())
         else:
             self.pi = CategoricalActor(**pi_args._toDict())
@@ -163,9 +163,9 @@ class SAC(QLearning):
                 if isinstance(a, tuple):
                     a = a[0]
                 a = a.squeeze(dim=0)
-            return a.numpy()
+            return a.detach()
     
-    def updatepi(self, data):
+    def updatePi(self, data):
         o = data['s']
         if isinstance(self.action_space, Discrete):
             pi = self.pi(o)

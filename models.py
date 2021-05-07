@@ -80,45 +80,22 @@ class QCritic(nn.Module):
                 q = (q*action).sum(dim=-1)
                 return q.squeeze(dim=1)
 
-class Actor(nn.Module):
-
-    def _distribution(self, obs):
-        raise NotImplementedError
-
-    def _log_prob_from_distribution(self, pi, act):
-        raise NotImplementedError
-
-    def forward(self, obs):
-        # Produce action distributions for given observations, and 
-        # optionally compute the log likelihood of given actions under
-        # those distributions.
-        pi = self._distribution(obs)
-        if (torch.isnan(pi).any()):
-            print('action is nan!')
-            pdb.set_trace()
-        return pi
-
-class CategoricalActor(Actor):
-    
-    def __init__(self, obs_dim, act_dim, hidden_sizes, activation, eps=0):
+class CategoricalActor(nn.Module):
+    """ always returns a distribution """
+    def __init__(self, **net_args):
         super().__init__()
-        self.eps = eps
         self.softmax = nn.Softmax(dim=1)
-        self.logits_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
-
-    def _distribution(self, obs, eps=None):
-        """ Distribution of action"""
-        logits = self.logits_net(obs)
-        prob = self.softmax(logits)
-        if eps is None:
-            eps = self.eps
-        if eps > 0:
-            prob = prob + self.eps # eps for numerical stability
-            prob = prob/(prob.sum(dim=1, keepdim=True))
-        return prob
+        net_fn = net_args['network']
+        self.network = net_fn(**net_args)
+    
+    def forward(self, obs):
+        logit = self.network(obs)
+        while len(logit.shape) > 2:
+            logit = logit.squeeze(-1) # HW of size 1 if CNN
+        return self.softmax(logit)
 
 
-class GaussianActor(Actor):
+class GaussianActor(nn.Module):
 
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
         super().__init__()

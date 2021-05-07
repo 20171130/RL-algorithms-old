@@ -42,10 +42,12 @@ class ReplayBuffer:
 
 
 def RL(logger, device,
-       env_fn, 
-      replay_size, max_ep_len, n_warmup, 
-      batch_size,  q_update_interval, n_test, save_interval,
-       seed, n_epoch, n_step,  **kwargs):
+       env_fn, agent_args,
+        n_warmup, batch_size, replay_size,
+       max_ep_len, test_interval, save_interval,
+       seed, n_step, log_interval,
+       p_update_interval=None, q_update_interval=None, pi_update_interval=None,
+       **kwargs):
     """ 
     a generic algorithm for model-free reinforcement learning
     plugin state preprocessing if necessary, by wrapping the env
@@ -60,11 +62,10 @@ def RL(logger, device,
     action_space = env.action_space
     # Experience buffer
     replay_buffer = ReplayBuffer(max_size=replay_size, device=device)
-    agent = agent_args['agent'](logger=logger, **agent_args._toDict())
+    agent = agent_args.agent(logger=logger, **agent_args._toDict())
     agent = agent.to(device)
-    pbar = iter(tqdm(range(n_epoch)))
+    pbar = iter(tqdm(range(int(1e6))))
     
-
     if hasattr(agent, "p"):
         q_update_start = n_warmup 
         # p and q starts at the same time, since q update also need p
@@ -76,23 +77,21 @@ def RL(logger, device,
         act_start = n_warmup
 
     def test_agent():
-        for j in range(n_test):
-            o, d, ep_ret, ep_len = test_env.reset(), False, 0, 0
-            while not(d or (ep_len == max_ep_len)):
-                # Take deterministic actions at test time 
-                action = agent.act(torch.as_tensor(o,  dtype=torch.float).to(device), True)
-                o, r, d, _ = test_env.step(action.cpu().numpy())
-                ep_ret += r
-                ep_len += 1
-            logger.log(TestEpRet=ep_ret, TestEpLen=ep_len, testEpisode=None)
+        o, d, ep_ret, ep_len = test_env.reset(), False, 0, 0
+        while not(d or (ep_len == max_ep_len)):
+            # Take deterministic actions at test time 
+            action = agent.act(torch.as_tensor(o,  dtype=torch.float).to(device), True)
+            o, r, d, _ = test_env.step(action.cpu().numpy())
+            ep_ret += r
+            ep_len += 1
+        logger.log(TestEpRet=ep_ret, TestEpLen=ep_len, testEpisode=None)
 
     # Prepare for interaction with environment
-    total_steps = n_step * n_epoch
     start_time = time.time()
     o, ep_ret, ep_len = env.reset(), 0, 0
 
     # Main loop: collect experience in env and update/log each epoch
-    for t in range(total_steps):
+    for t in range(n_step): 
         logger.log(interaction=None)
         if t >= act_start:
             a = agent.act(torch.as_tensor(o,  dtype=torch.float).to(device))
@@ -114,7 +113,7 @@ def RL(logger, device,
         # Update handling
         if hasattr(agent, "p")  and t % (p_update_interval) == 0:
             batch = replay_buffer.sample_batch(batch_size)
-            agent.updatep(data=batch)
+            agent.updateP(data=batch)
             
         if hasattr(agent, "q1") and t>q_update_start and t % (q_update_interval) == 0:
             batch = replay_buffer.sample_batch(batch_size)
@@ -122,17 +121,18 @@ def RL(logger, device,
             
         if hasattr(agent, "pi") and t>pi_update_start and t % (pi_update_interval) == 0:
             batch = replay_buffer.sample_batch(batch_size)
-            agent.updateP(data=batch)
+            agent.updatePi(data=batch)
                 
         if (t+1) % save_interval == 0:
             logger.save(agent)
             
-        # End of epoch handling
-        if (t+1) % n_step == 0:
-            next(pbar)
-
-            # Test the performance of the deterministic version of the agent.
+        if (t) % test_interval == 0:
             test_agent()
+                
+        # End of epoch handling
+        if t % log_interval == 0:
+            next(pbar)
+            # Test the performance of the deterministic version of the agent.
             # Log info about epoch
             logger.log(epoch=None)
             logger.flush()
