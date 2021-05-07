@@ -122,18 +122,24 @@ def RL(logger, device,
     p_update_steps = 1
     q_update_steps = 1
     pi_update_steps = 1
-    p_update_interval = p_args.update_interval
+    if hasattr(agent, "ps"):
+        p_update_interval = p_args.update_interval
+        if p_update_interval < 1:
+            p_update_steps = int(1/p_update_interval)
+            p_update_interval = 1
+            
+    if hasattr(agent, "pi"):
+        pi_update_interval = pi_args.update_interval
+        if pi_update_interval < 1:
+            pi_update_steps = int(1/pi_update_interval)
+            pi_update_interval = 1
+            
     q_update_interval = q_args.update_interval
-    pi_update_interval = pi_args.update_interval
     if q_update_interval < 1:
         q_update_steps = int(1/q_update_interval)
         q_update_interval = 1
-    if pi_update_interval < 1:
-        pi_update_steps = int(1/pi_update_interval)
-        pi_update_interval = 1
-    if p_update_interval < 1:
-        p_update_steps = int(1/p_update_interval)
-        p_update_interval = 1
+
+
 
     def test_agent():
         o, d, ep_ret, ep_len = test_env.reset(), False, 0, 0

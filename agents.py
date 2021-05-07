@@ -1,6 +1,8 @@
 from copy import deepcopy
 from models import *
 """
+    Not implemented yet:
+        PPO, SAC continous action, MBPO continous action 
     Hierarchiy:
         algorithm
             batchsize

@@ -6,7 +6,7 @@ from agents import MBPO
 """
 algo_args = Config()
 
-algo_args.n_warmup=int(2e3)
+algo_args.n_warmup=int(5e3)
 """
  rainbow said 2e5 samples or 5e4 updates is typical for Qlearning
  bs256lr3e-4, it takes 2e4updates
@@ -19,7 +19,7 @@ algo_args.max_ep_len=500
 algo_args.test_interval = int(1e4)
 algo_args.seed=0
 algo_args.batch_size=256 # the same as MBPO
-algo_args.save_interval=int(1e6)
+algo_args.save_interval=600 # in seconds
 algo_args.log_interval=int(2e3/200)
 algo_args.n_step=int(1e8)
 
