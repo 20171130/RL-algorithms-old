@@ -27,14 +27,60 @@ def CNN(sizes, kernels, strides, paddings, activation, output_activation=nn.Iden
         layers += [nn.Conv2d(sizes[j], sizes[j+1], kernels[j], strides[j], paddings[j]), act()]
     return nn.Sequential(*layers)
 
-class WorldModel(nn.Module):
-
-    def __init__(self, obs_dim, hidden_sizes, activation):
+class ParameterizedModel(nn.Module):
+    """
+        assumes parameterized state representation
+        we may use a gaussian prediciton,
+        but it degenrates without a kl hyperparam
+        unlike the critic and the actor class, 
+        the sizes argument does not include the dim of the state
+    """
+    def __init__(self, env_fn, **net_args):
         super().__init__()
-        self.v_net = mlp([obs_dim] + list(hidden_sizes) + [1], activation)
+        self.action_space=env_fn().action_space
+        observation_dim=env_fn().observation_space[0]
+        input_dim = net_args['sizes'][0]
+        output_dim = net_args['sizes'][-1]
+        if isinstance(self.action_space, Discrete):
+            self.action_embedding = nn.Embedding(self.action_space.n,input_dim)
+        self.net = mlp(**net_args)
+        self.state_head = nn.Linear(output_dim, self.observation_dim)
+        self.reward_head = nn.Linear(output_dim, 1)
+        self.done_head = nn.Linear(output_dim, 1)
+        self.MSE = nn.MESLoss(reduction='none')
+        self.BCE = nn.BCEwithLogitLoss(reduction='none')
 
-    def forward(self, obs):
-        return torch.squeeze(self.v_net(obs), -1) # Critical to ensure v has right shape.
+    def forward(self, s, a, r=None, s1=None, d=None):
+        if r is None: #inference
+            with torch.no_grad():
+                embedding = s
+                if isinstance(self.action_space, Discrete):
+                    embedding = embedding + self.action_embedding(a)
+                embedding = self.net(embedding)
+
+                state = self.state_head(embedding)
+                reward = self.reward_head(embedding).squeeze(1)
+                done = nn.sigmoid(self.done_head(embedding))
+                done = torch.stack([1-done, done], dim = 1)
+                done = Categorical(done).sample()
+                return state, reward, done
+        else: # training
+            embedding = s
+            if isinstance(self.action_space, Discrete):
+                embedding = embedding + self.action_embedding(a)
+            embedding = self.net(embedding)
+
+            state = self.state_head(embedding)
+            reward = self.reward_head(embedding).squeeze(1)
+            done = self.done_head(embedding).squeeze(1)
+            
+            state_loss = self.MSE(state).mean(dim = 1)
+            reward_loss = self.MSE(reward)
+            done_loss = self.MSE(done).mean(dim = 1)
+            
+            logger.log(state_loss=state_loss, reward_loss=reward_loss, done_loss=done_loss)
+            return state_loss+reward_loss+done_loss
+        
     
 class VCritic(nn.Module):
 
@@ -81,7 +127,9 @@ class QCritic(nn.Module):
                 return q.squeeze(dim=1)
 
 class CategoricalActor(nn.Module):
-    """ always returns a distribution """
+    """ 
+    always returns a distribution
+    """
     def __init__(self, **net_args):
         super().__init__()
         self.softmax = nn.Softmax(dim=1)
@@ -93,8 +141,22 @@ class CategoricalActor(nn.Module):
         while len(logit.shape) > 2:
             logit = logit.squeeze(-1) # HW of size 1 if CNN
         return self.softmax(logit)
-
-
+    
+class RegressionActor(nn.Module):
+    """
+    determinsitc actor, used in DDPG and TD3
+    """
+    def __init__(self, **net_args):
+        super().__init__()
+        net_fn = net_args['network']
+        self.network = net_fn(**net_args)
+    
+    def forward(self, obs):
+        out = self.network(obs)
+        while len(out.shape) > 2:
+            out = out.squeeze(-1) # HW of size 1 if CNN
+        return out
+    
 class GaussianActor(nn.Module):
 
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
@@ -114,7 +176,9 @@ class GaussianActor(nn.Module):
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
 class SquashedGaussianActor(nn.Module):
-
+    """
+    stochastic actor for continous action sapce, used in SAC 
+    """
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation, act_limit):
         super().__init__()
         self.net = mlp([obs_dim] + list(hidden_sizes), activation, activation)

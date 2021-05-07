@@ -102,34 +102,6 @@ class QLearning(nn.Module):
                 return torch.as_tensor(self.action_space.sample())
             return a
     
-class PPO(nn.Module):
-    """ Actor Critic (V function) """
-    def __init__(self, observation_space, action_space, 
-                 hidden_sizes=(64,64), activation=nn.Tanh):
-        super().__init__()
-
-        obs_dim = observation_space.shape[0]
-
-        # policy builder depends on action space
-        if isinstance(action_space, Box):
-            self.pi = MLPGaussianActor(obs_dim, action_space.shape[0], hidden_sizes, activation)
-        elif isinstance(action_space, Discrete):
-            self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation)
-
-        # build value function
-        self.v  = MLPVFunction(obs_dim, hidden_sizes, activation)
-
-    def step(self, obs):
-        with torch.no_grad():
-            pi = self.pi._distribution(obs)
-            a = pi.sample()
-            logp_a = self.pi._log_prob_from_distribution(pi, a)
-            v = self.v(obs)
-        return a.numpy(), v.numpy(), logp_a.numpy()
-
-    def act(self, obs):
-        return self.step(obs)[0]
-    
 class SAC(QLearning):
     """ Actor Critic (Q function) """
     def __init__(self, logger, env_fn, q_args, pi_args, alpha, gamma, target_sync_rate, **kwargs):
@@ -242,30 +214,65 @@ class SAC(QLearning):
                         p_targ.data.mul_(1 - self.target_sync_rate)
                         p_targ.data.add_(self.target_sync_rate * p.data)
         
-class MBPO(nn.Module):
-    """ PPO """
-    def __init__(self, observation_space, action_space, 
-                 hidden_sizes=(64,64), activation=nn.Tanh):
-        super().__init__()
-
-        obs_dim = observation_space.shape[0]
-
-        # policy builder depends on action space
-        if isinstance(action_space, Box):
-            self.pi = MLPGaussianActor(obs_dim, action_space.shape[0], hidden_sizes, activation)
-        elif isinstance(action_space, Discrete):
-            self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation)
-
-        # build value function
-        self.v  = MLPVFunction(obs_dim, hidden_sizes, activation)
-
-    def step(self, obs):
+class MBPO(SAC):
+    """  """
+    def __init__(self, logger, env_fn, p_args, q_args, pi_args, alpha, gamma, target_sync_rate, **kwargs):
+        """
+            q_net is the network class
+        """
+        super().__init__(logger, env_fn, q_args, pi_args, alpha, gamma, target_sync_rate, **kwargs)
+        self.n_p = 7
+        if isinstance(self.action_space, Box): #continous
+            ps = [RegressionModel(p_args) for i in range(self.n_p)]
+        else:
+            ps = [CategoricalActor(p_args) for i in range(self.n_p)]
+        self.ps = nn.ModuleList(ps)
+        self.p_params = itertools.chain([item.parameters() for item in self.ps])
+        self.p_optimizer = Adam(self.p_params, lr=p_args.lr)
+        
+    def updateP(self, data):
+        return None
+    
+    def unroll(self, s, a):
+        """ not batched """
+        
+        p = self.ps[np.randint(self.n_p)]
+        
         with torch.no_grad():
-            pi = self.pi._distribution(obs)
-            a = pi.sample()
-            logp_a = self.pi._log_prob_from_distribution(pi, a)
-            v = self.v(obs)
-        return a.numpy(), v.numpy(), logp_a.numpy()
-
-    def act(self, obs):
-        return self.step(obs)[0]
+            o = o.unsqueeze(0)
+            if isinstance(self.action_space, Discrete):
+                a = self.pi(o)
+                if (torch.isnan(a).any()):
+                    print('action is nan!')
+                    pdb.set_trace()
+                elif deterministic:
+                    a = a.argmax(dim=1)[0]
+                else:
+                    a = Categorical(a[0]).sample()
+            else:
+                a = self.pi(o, deterministic)
+                if isinstance(a, tuple):
+                    a = a[0]
+                a = a.squeeze(dim=0)
+                
+        return s1, r, d
+    
+    def act(self, o, deterministic=False):
+        """not batched"""
+        with torch.no_grad():
+            o = o.unsqueeze(0)
+            if isinstance(self.action_space, Discrete):
+                a = self.pi(o)
+                if (torch.isnan(a).any()):
+                    print('action is nan!')
+                    pdb.set_trace()
+                elif deterministic:
+                    a = a.argmax(dim=1)[0]
+                else:
+                    a = Categorical(a[0]).sample()
+            else:
+                a = self.pi(o, deterministic)
+                if isinstance(a, tuple):
+                    a = a[0]
+                a = a.squeeze(dim=0)
+            return a.detach()
