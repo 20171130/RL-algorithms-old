@@ -2,6 +2,8 @@ import gym
 import numpy as np
 import random
 import torch
+from utils import Logger
+
 
 def count_vars(module):
     return sum([np.prod(p.shape) for p in module.parameters()])
@@ -10,6 +12,13 @@ def combined_shape(length, shape=None):
     if shape is None:
         return (length,)
     return (length, shape) if np.isscalar(shape) else (length, *shape)
+
+def exists_or_mkdir(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+        return False
+    else:
+        return True
 
 class Config(object):
     def __init__(self):
@@ -47,10 +56,21 @@ class Logger(object):
     uses kwargs instead of dict for convenience
     all None valued keys are counters
     """
-    def __init__(self, logger):
-        self.logger = logger
+    def __init__(self, args):
+        run=wandb.init(
+            project="RL",
+            config=args._toDict(recursive=True),
+            name=args.name,
+            group=args.env_name,
+        )
+        self.args = args
+        self.logger = Logger(run)
         self.counters = {'epoch':0}
         self.frequency = 10 # logs per epoch
+        
+    def save(self, model):
+        exists_or_mkdir(f"checkpoints/{args.name}")
+        torch.save(model.state_dict(), open(f"checkpoints/{args.name}/{self.counters['epoch']}.pt", 'wb'))
         
     def log(self, data=None, **kwargs):
         if data is None:

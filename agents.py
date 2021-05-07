@@ -138,16 +138,109 @@ class SAC(QLearning):
         """
         super().__init__(logger, env_fn, q_args, gamma, 0, target_sync_rate, **kwargs)
         # eps = 0
-        self.logger = logger
-        self.gamma = gamma
         self.alpha = alpha
-        self.action_space=env_fn().action_space
+        if isinstance(self.action_space, gym.Box): #continous
+            self.pi = SquashedGaussianActor(**pi_args._toDict())
+        else:
+            self.pi = CategoricalActor(**pi_args._toDict())
+        self.pi_optimizer = Adam(self.pi.parameters(), lr=pi_args.lr)
 
-    def act(self, obs):
-        return self.step(obs)[0]
+    def act(self, o, deterministic=False):
+        """not batched"""
+        with torch.no_grad():
+            o = o.unsqueeze(0)
+            if isinstance(self.action_space, Discrete):
+                a = self.pi(o)
+                if (torch.isnan(a).any()):
+                    print('action is nan!')
+                    pdb.set_trace()
+                elif deterministic:
+                    a = a.argmax(dim=1)[0]
+                else:
+                    a = Categorical(a[0]).sample()
+            else:
+                a = self.pi(o, deterministic)
+                if isinstance(a, tuple):
+                    a = a[0]
+                a = a.squeeze(dim=0)
+            return a.numpy()
     
     def updatepi(self, data):
-        return None
+        o = data['s']
+        if isinstance(self.action_space, Discrete):
+            pi = self.pi(o)
+            logp = torch.log(pi)
+            q1 = self.q1(o)
+            q2 = self.q2(o)
+            q = torch.min(q1, q2)
+            q = q - self.alpha * logp
+            optimum = q.max(dim=1, keepdim=True)[0].detach()
+            regret = optimum - (pi*q).sum(dim=1)
+            loss = regret.mean()
+            entropy = -(pi*logp).sum(dim=1).mean(dim=0)
+            self.logger.log(entropy=entropy, pi_regret=loss)
+        else:
+            action, logp = self.pi(o)
+            q1 = self.q1(o, action)
+            q2 = self.q2(o, action)
+            q = torch.min(q1, q2)
+            q = q - self.alpha * logp
+            loss = (-q).mean()
+            self.logger.log(logp=logp, pi_reward=q)
+            
+        self.pi_optimizer.zero_grad()
+        loss.backward()
+        #torch.nn.utils.clip_grad_norm_(parameters=self.pi.parameters(), max_norm=5, norm_type=2)
+        self.pi_optimizer.step()
+
+    
+    def updateQ(self, data):
+        """
+            uses alpha to encourage diversity
+            for discrete action spaces, different from QLearning since we have a policy network
+                takes all possible next actions
+        """
+        o, a, r, o2, d = data['s'], data['a'], data['r'], data['s1'], data['d']
+        
+        q1 = self.q1(o, a)
+        q2 = self.q2(o, a)
+        
+        if isinstance(self.action_space, Discrete):
+            # Bellman backup for Q functions
+            with torch.no_grad():
+                # Target actions come from *current* policy
+                q_next = torch.min(self.q1(o2), self.q2(o2))
+                a2 = self.pi(o2).detach() # [b, n_a]
+                loga2 = torch.log(a2)
+                q1_pi_targ = self.q1_target(o2)
+                q2_pi_targ = self.q2_target(o2) # [b, n_a]
+                q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ) - self.alpha * loga2
+                q_pi_targ = (a2*q_pi_targ).sum(dim=1)
+                backup = r + self.gamma * (1 - d) * (q_pi_targ)
+
+            # MSE loss against Bellman backup
+            loss_q1 = ((q1 - backup)**2).mean()
+            loss_q2 = ((q2 - backup)**2).mean()
+            loss_q = loss_q1 + loss_q2
+
+            # Useful info for logging
+            self.logger.log(q_mean=q_pi_targ.mean(), q_hist=q_pi_targ, q_diff=((q1+q2)/2-backup).mean())
+
+            # First run one gradient descent step for Q1 and Q2
+            self.q_optimizer.zero_grad()
+            loss_q.backward()
+            torch.nn.utils.clip_grad_norm_(parameters=self.q_params, max_norm=5, norm_type=2)
+            self.q_optimizer.step()
+
+            # Record things
+            self.logger.log(q_update=None, loss_q=loss_q/2)
+
+            # update the target nets
+            with torch.no_grad():
+                for current, target in [(self.q1, self.q1_target), (self.q2, self.q2_target)]:
+                    for p, p_targ in zip(current.parameters(), target.parameters()):
+                        p_targ.data.mul_(1 - self.target_sync_rate)
+                        p_targ.data.add_(self.target_sync_rate * p.data)
         
 class MBPO(nn.Module):
     """ PPO """

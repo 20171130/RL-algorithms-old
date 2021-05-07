@@ -42,24 +42,38 @@ class ReplayBuffer:
 
 
 def RL(logger, device,
-       env_fn, agent, 
+       env_fn, 
       replay_size, max_ep_len, n_warmup, 
-      batch_size, n_step, n_update, n_test, 
-       seed, n_epoch, **kwargs):
+      batch_size,  q_update_interval, n_test, save_interval,
+       seed, n_epoch, n_step,  **kwargs):
     """ 
     a generic algorithm for model-free reinforcement learning
     plugin state preprocessing if necessary, by wrapping the env
     warmup:
         model, q, and policy each warmup for n_warmup steps before used
     """
-
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    
     env, test_env = env_fn(), env_fn()
     observation_space = env.observation_space
     action_space = env.action_space
     # Experience buffer
     replay_buffer = ReplayBuffer(max_size=replay_size, device=device)
-    
+    agent = agent_args['agent'](logger=logger, **agent_args._toDict())
+    agent = agent.to(device)
     pbar = iter(tqdm(range(n_epoch)))
+    
+
+    if hasattr(agent, "p"):
+        q_update_start = n_warmup 
+        # p and q starts at the same time, since q update also need p
+        p_update_start = n_warmup
+        act_tart = 2*n_warmup
+    else:
+        q_update_start = 0
+        pi_update_start = 0
+        act_start = n_warmup
 
     def test_agent():
         for j in range(n_test):
@@ -80,7 +94,7 @@ def RL(logger, device,
     # Main loop: collect experience in env and update/log each epoch
     for t in range(total_steps):
         logger.log(interaction=None)
-        if t >= n_warmup:
+        if t >= act_start:
             a = agent.act(torch.as_tensor(o,  dtype=torch.float).to(device))
             a = a.detach().cpu().numpy()
         else:
@@ -97,11 +111,22 @@ def RL(logger, device,
             logger.log(EpRet=ep_ret, EpLen=ep_len, episode=None)
             o, ep_ret, ep_len = env.reset(), 0, 0
 
-        # Update handling, can be extended
-        if t % (n_step//n_update) == 0:
+        # Update handling
+        if hasattr(agent, "p")  and t % (p_update_interval) == 0:
+            batch = replay_buffer.sample_batch(batch_size)
+            agent.updatep(data=batch)
+            
+        if hasattr(agent, "q1") and t>q_update_start and t % (q_update_interval) == 0:
             batch = replay_buffer.sample_batch(batch_size)
             agent.updateQ(data=batch)
+            
+        if hasattr(agent, "pi") and t>pi_update_start and t % (pi_update_interval) == 0:
+            batch = replay_buffer.sample_batch(batch_size)
+            agent.updateP(data=batch)
                 
+        if (t+1) % save_interval == 0:
+            logger.save(agent)
+            
         # End of epoch handling
         if (t+1) % n_step == 0:
             next(pbar)
