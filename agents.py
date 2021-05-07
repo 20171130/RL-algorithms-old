@@ -197,12 +197,12 @@ class SAC(QLearning):
             loss_q = loss_q1 + loss_q2
 
             # Useful info for logging
-            self.logger.log(q_mean=q_pi_targ.mean(), q_hist=q_pi_targ, q_diff=((q1+q2)/2-backup).mean())
+            self.logger.log(q=q_pi_targ, q_diff=((q1+q2)/2-backup).mean())
 
             # First run one gradient descent step for Q1 and Q2
             self.q_optimizer.zero_grad()
             loss_q.backward()
-            torch.nn.utils.clip_grad_norm_(parameters=self.q_params, max_norm=5, norm_type=2)
+            #torch.nn.utils.clip_grad_norm_(parameters=self.q_params, max_norm=5, norm_type=2)
             self.q_optimizer.step()
 
             # Record things
@@ -242,15 +242,15 @@ class MBPO(SAC):
         self.p_optimizer.step()
         return None
     
-    def roll(self, s):
+    def roll(self, s, a):
         """ batched """
-        p = self.ps[np.randint(self.n_p)]
+        p = self.ps[np.random.randint(self.n_p)]
         
         with torch.no_grad():
             if isinstance(self.action_space, Discrete):
-                a = self.act(s, determinsitc=False, batched=True)
-                s1, r, d = p(s, a)
+                a = self.act(s, deterministic=False, batched=True)
+                r, s1, d = p(s, a)
             else:
                 return None
                 
-        return s, a, s1, r, d
+        return  r, s1, d

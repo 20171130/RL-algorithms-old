@@ -54,7 +54,6 @@ class ParameterizedModel(nn.Module):
     def forward(self, s, a, r=None, s1=None, d=None):
         if r is None: #inference
             with torch.no_grad():
-                pdb.set_trace()
                 embedding = s
                 if isinstance(self.action_space, Discrete):
                     embedding = embedding + self.action_embedding(a)
@@ -62,10 +61,10 @@ class ParameterizedModel(nn.Module):
 
                 state = self.state_head(embedding)
                 reward = self.reward_head(embedding).squeeze(1)
-                done = nn.sigmoid(self.done_head(embedding))
-                done = torch.stack([1-done, done], dim = 1)
-                done = Categorical(done).sample()
-                return state, reward, done
+                done = torch.sigmoid(self.done_head(embedding))
+                done = torch.cat([1-done, done], dim = 1)
+                done = Categorical(done).sample() # [b]
+                return  reward, state, done
         else: # training
             embedding = s
             if isinstance(self.action_space, Discrete):

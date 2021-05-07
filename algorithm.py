@@ -33,7 +33,7 @@ class ReplayBuffer:
         """ can be batched"""
         if not isinstance(done, bool): # batched
             for i in range(done.shape[0]):
-                self.data[self.ptr] = {'s':obs[i], 'a':act[i], 'r':rew[i], 's1':next_obs[i], 'd':float(done[i])}
+                self._store(obs[i], act[i], rew[i], next_obs[i], done[i])
         else:
             self._store(obs, act, rew, next_obs, done)
 
@@ -55,8 +55,9 @@ class ReplayBuffer:
             self._rewind()
             return None
         
-        idxs = list(range(self.read_ptr, min(self.read_ptr+batch_size, len(self.data))))
-        self.read_ptr += self.batch_size
+        end =  min(self.read_ptr+batch_size, len(self.data))
+        idxs = list(range(self.read_ptr, end))
+        self.read_ptr = end
         raw_batch = [self.data[i] for i in idxs]
         batch = {}
         for key in raw_batch[0]:
@@ -100,7 +101,7 @@ def RL(logger, device,
     
     # Experience buffer
     env_buffer = ReplayBuffer(max_size=replay_size, device=device)
-    if hasattr(agent, "p"): # use the model buffer if there is a model
+    if hasattr(agent, "ps"): # use the model buffer if there is a model
         buffer = ReplayBuffer(max_size=replay_size, device=device)
     else:
         buffer = env_buffer  
@@ -169,16 +170,16 @@ def RL(logger, device,
             o, ep_ret, ep_len = env.reset(), 0, 0
 
         # model rollout
-        if hasattr(agent, "ps") and t% p_args.refresh_interval == 0 and t >n_warmup:
+        if hasattr(agent, "ps") and t% p_args.refresh_interval == 0 and t >=n_warmup:
             env_buffer._rewind()
             buffer.clear()
             batch = env_buffer.iterBatch(batch_size)
             while not batch is None and len(buffer.data) < buffer.max_size:
-                s, a, r, s1, d = data['s'], data['a'], data['r'], data['s1'], data['d']
+                s, a, r, s1, d = batch['s'], batch['a'], batch['r'], batch['s1'], batch['d']
                 for i in range(p_args.branch):
                     r, s1, d = agent.roll(s, a)
                     buffer.store(s, a, r, s1, d)
-                batch = env_buffer.iterBatch()
+                batch = env_buffer.iterBatch(batch_size)
                         
         # Update handling
         if hasattr(agent, "ps")  and (t % p_update_interval) == 0 and t>batch_size:
