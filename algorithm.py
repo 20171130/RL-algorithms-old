@@ -96,6 +96,7 @@ def RL(logger, device,
     p_args, q_args, pi_args = agent_args.p_args, agent_args.q_args, agent_args.pi_args
     agent = agent_args.agent(logger=logger, **agent_args._toDict())
     agent = agent.to(device)
+    last_save = 0
     
     pbar = iter(tqdm(range(int(1e6))))
     
@@ -197,8 +198,9 @@ def RL(logger, device,
                 batch = buffer.sampleBatch(batch_size)
                 agent.updatePi(data=batch)
                 
-        if (t+1) % save_interval == 0:
+        if time.time() - last_save >= save_interval:
             logger.save(agent)
+            last_save = time.time()
             
         if (t) % test_interval == 0:
             test_agent()

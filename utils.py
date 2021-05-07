@@ -1,3 +1,4 @@
+import os
 import gym
 import numpy as np
 import random
@@ -76,8 +77,11 @@ class Logger(object):
         self.step_key = 'interaction'
         
     def save(self, model):
-        exists_or_mkdir(f"checkpoints/{args.name}")
-        torch.save(model.state_dict(), open(f"checkpoints/{args.name}/{self.counters['epoch']}.pt", 'wb'))
+        exists_or_mkdir(f"checkpoints/{self.args.name}")
+        filename = f"{self.buffer[self.step_key]}.pt"
+        with open(f"checkpoints/{self.args.name}/{filename}", 'wb') as f:
+            torch.save(model.state_dict(), f)
+        print(f"checkpoint save as {filename}")
         
     def log(self, raw_data=None, rolling=None, **kwargs):
         if raw_data is None:
