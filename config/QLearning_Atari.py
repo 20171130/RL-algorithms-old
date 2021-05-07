@@ -19,7 +19,7 @@ algo_args.replay_size=int(1e6)
 algo_args.test_interval = int(3e4)
 algo_args.seed=0
 algo_args.save_interval=int(1e6)
-algo_args.log_interval=int(1e5)
+algo_args.log_interval=int(2e3)
 algo_args.n_step=int(1e8)
 
 agent_args=Config()

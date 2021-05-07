@@ -13,7 +13,7 @@ from torch.distributions.categorical import Categorical
 from torch.optim import Adam
 
 
-def MLP(sizes, activation, output_activation=nn.Identity):
+def MLP(sizes, activation, output_activation=nn.Identity, **kwargs):
     layers = []
     for j in range(len(sizes)-1):
         act = activation if j < len(sizes)-2 else output_activation

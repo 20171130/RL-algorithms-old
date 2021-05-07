@@ -50,14 +50,16 @@ class TabularLogger(object):
         
 class Logger(object):
     """
-    A logger wrapper for visualized loggers, such as tb or wandb
-    Automatically counts steps, epoch, etc. and sets logging interval
-    to prevent the log becoming too big
-    uses kwargs instead of dict for convenience
-    all None valued keys are counters
-    
-    for RL, there is not a natural notion of an "epoch",
-    set frequency = 1 for one log per epoch
+    A logger wrapper with buffer for visualized logger backends, such as tb or wandb
+    counting
+        all None valued keys are counters
+        this feature is helpful when logging from model interior
+        since the model should be step-agnostic
+    economic logging
+        stores the values, log once when flush is called
+    syntactic sugar
+        supports both .log(data={key: value}) and .log(key=value) 
+    custom x axis (wandb is buggy about this)
     """
     def __init__(self, args):
         run=wandb.init(
@@ -68,48 +70,38 @@ class Logger(object):
         )
         self.args = args
         self.logger = run
-        self.counters = {'epoch':0}
-        self.frequency = 1 # one log per epoch
+        self.buffer = {}
         self.step_key = 'interaction'
         
     def save(self, model):
         exists_or_mkdir(f"checkpoints/{args.name}")
         torch.save(model.state_dict(), open(f"checkpoints/{args.name}/{self.counters['epoch']}.pt", 'wb'))
         
-    def log(self, data=None, **kwargs):
+    def log(self, data=None, step=None, **kwargs):
         if data is None:
             data = {}
         data.update(kwargs)
-        # counting
+
         for key in data:
-            if not key in self.counters:
-                self.counters[key] = 0
-            self.counters[key] += 1
-            
-        to_store = {}
-        epoch = self.counters['epoch']
-        for key in data:
-            count = self.counters[key]
-            period = count//(epoch+1) + 1
-            flag = random.random()< self.frequency/period
-            if flag:
-                if data[key] is None:
-                    to_store[key] = self.counters[key]
-                else:
-                    valid = True
-                    if isinstance(data[key], torch.Tensor):
-                        data[key] = data[key].detach().cpu()
-                        if  torch.isnan(data[key]).any():
-                            valid = False
-                    elif np.isnan(data[key]).any():
-                        valid = False
-                    if not valid:
-                        print(f'{key} is nan!')
-                        continue
-                    to_store[key] = data[key]
+            if data[key] is None:
+                if not key in self.buffer:
+                    self.buffer[key] = 0
+                self.buffer[key] += 1
                 
-        if len(to_store) > 0:
-            self.logger.log(to_store, step =self.counters[self.step_key], commit=True)
-        
+            else:
+                valid = True
+                # check nans
+                if isinstance(data[key], torch.Tensor):
+                    data[key] = data[key].detach().cpu()
+                    if torch.isnan(data[key]).any():
+                        valid = False
+                elif np.isnan(data[key]).any():
+                    valid = False
+                if not valid:
+                    print(f'{key} is nan!')
+                    pdb.set_trace()
+                    continue
+                self.buffer[key] = data[key]
+                
     def flush(self):
-        self.logger.log(data={'epoch':self.counters['epoch']}, step =self.counters[self.step_key], commit=True)
+        self.logger.log(data=self.buffer, step =self.buffer[self.step_key], commit=True)
